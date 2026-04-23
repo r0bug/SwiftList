@@ -12,8 +12,23 @@
         color: #eee;
         background: #181818;
       }
-      header { padding: 12px 14px 8px; display: flex; align-items: center; justify-content: space-between; }
+      header { padding: 12px 14px 8px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
       header h1 { font-size: 15px; margin: 0; }
+      .sublink { color: #6af; font-size: 11px; text-decoration: none; }
+      .sublink:hover { text-decoration: underline; }
+      #scan-section { padding: 8px 14px; border-top: 1px solid #2a2a2a; }
+      .scan-row { display: flex; align-items: center; gap: 8px; }
+      .scan-row button { background: #2a2a2a; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+      .scan-row button:hover { background: #333; border-color: #555; }
+      .scan-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .folder { font-size: 11px; color: #888; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .progress-wrap { margin-top: 6px; display: none; }
+      .progress-wrap.visible { display: block; }
+      .progress-bar { height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+      .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #4a8, #6af); transition: width 0.3s ease; }
+      .progress-text { font-size: 11px; color: #aaa; margin-top: 4px; }
+      .progress-text .err { color: #f66; }
+      .progress-text .ok { color: #6c6; }
       .status { font-size: 12px; }
       .status.ok { color: #6c6; }
       .status.err { color: #f66; }
@@ -49,7 +64,10 @@
   </head>
   <body>
     <header>
-      <h1>swiftlist</h1>
+      <div>
+        <h1>swiftlist</h1>
+        <a href="#" id="open-webui" class="sublink">Open web UI →</a>
+      </div>
       <span id="status" class="status"><span class="dot"></span><span id="status-text">Checking…</span></span>
     </header>
 
@@ -61,6 +79,17 @@
       <button data-path="/settings">Settings</button>
       <button id="toggle-config">Config</button>
     </nav>
+
+    <section id="scan-section">
+      <div class="scan-row">
+        <button id="scan-btn">Scan inbox</button>
+        <span id="scan-folder" class="folder" title=""></span>
+      </div>
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="progress-text" id="progress-text"></div>
+      </div>
+    </section>
 
     <section>
       <form class="config" id="config">

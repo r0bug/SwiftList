@@ -40,8 +40,40 @@ interface PendingFile {
   arrivedAt: number;
 }
 
+export interface IngestStatus {
+  pending: number; // files enqueued, not yet flushed (awaiting debounce)
+  processing: number; // files currently inside flushBatch/processCluster
+  totalQueued: number; // lifetime: enqueues accepted (deduped by path within a batch would count once per enqueue call)
+  totalProcessed: number; // lifetime: files that finished the pipeline (persisted/assigned/pended)
+  totalErrors: number; // lifetime: per-file errors
+  totalDuplicates: number; // lifetime: sha-256 duplicates skipped
+  totalAiCalls: number; // lifetime: successful aiService.analyze calls
+  totalAiCostUsd: number; // lifetime: cumulative AI spend
+  lastEventAt: string | null;
+}
+
 class IngestService {
   private byDir = new Map<string, { files: PendingFile[]; timer: NodeJS.Timeout }>();
+  private status: IngestStatus = {
+    pending: 0,
+    processing: 0,
+    totalQueued: 0,
+    totalProcessed: 0,
+    totalErrors: 0,
+    totalDuplicates: 0,
+    totalAiCalls: 0,
+    totalAiCostUsd: 0,
+    lastEventAt: null,
+  };
+
+  getStatus(): IngestStatus {
+    return { ...this.status };
+  }
+
+  private bump<K extends keyof IngestStatus>(key: K, by: IngestStatus[K] extends number ? number : never) {
+    (this.status[key] as number) = (this.status[key] as number) + (by as number);
+    this.status.lastEventAt = new Date().toISOString();
+  }
 
   enqueue(filePath: string, watchFolderId?: string): { jobId: string } {
     const dir = path.dirname(filePath);
@@ -54,6 +86,8 @@ class IngestService {
       })();
 
     entry.files.push({ path: filePath, watchFolderId, arrivedAt: Date.now() });
+    this.status.pending += 1;
+    this.bump('totalQueued', 1);
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       this.byDir.delete(dir);
@@ -67,6 +101,8 @@ class IngestService {
 
   private async flushBatch(sourceFolder: string, files: PendingFile[]): Promise<void> {
     logger.info({ sourceFolder, count: files.length }, 'ingest batch flush');
+    this.status.pending = Math.max(0, this.status.pending - files.length);
+    this.status.processing += files.length;
 
     // Step 1: per-file persistence. Photos are inserted unattached.
     const persisted: PhotoCandidate[] = [];
@@ -78,6 +114,8 @@ class IngestService {
           await prisma.ingestEvent.create({
             data: { path: f.path, sha256, decision: 'DUPLICATE_SKIPPED' },
           });
+          this.bump('totalDuplicates', 1);
+          this.bump('totalProcessed', 1);
           continue;
         }
 
@@ -125,10 +163,16 @@ class IngestService {
             error: (err as Error).message,
           },
         });
+        this.bump('totalErrors', 1);
+        this.bump('totalProcessed', 1);
       }
     }
 
-    if (persisted.length === 0) return;
+    // Persisted files count toward totalProcessed once their cluster resolves.
+    if (persisted.length === 0) {
+      this.status.processing = Math.max(0, this.status.processing - files.length);
+      return;
+    }
 
     // Step 2: cluster.
     const { clusters } = clusterPhotos(persisted);
@@ -138,10 +182,16 @@ class IngestService {
     for (const cluster of clusters) {
       try {
         await this.processCluster(cluster, sourceFolder);
+        this.bump('totalProcessed', cluster.length);
       } catch (err) {
         logger.error({ err, sourceFolder }, 'cluster processing failed');
+        this.bump('totalErrors', cluster.length);
+        this.bump('totalProcessed', cluster.length);
       }
     }
+    // processing -= file count for this batch; use files.length so pre-AI
+    // errors are also drained.
+    this.status.processing = Math.max(0, this.status.processing - files.length);
   }
 
   private async processCluster(cluster: PhotoCandidate[], sourceFolder: string): Promise<void> {
@@ -185,6 +235,8 @@ class IngestService {
       photos: photosForAi,
       continuation,
     });
+    this.bump('totalAiCalls', 1);
+    this.bump('totalAiCostUsd', costUsd);
 
     // Step 4: persist results in a transaction.
     await prisma.$transaction(async (tx) => {

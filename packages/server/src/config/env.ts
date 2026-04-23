@@ -29,6 +29,7 @@ const EnvSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
   AI_BATCH_SIZE: z.coerce.number().default(20),
+  SWIFTLIST_WATCH_FOLDER: z.string().optional(),
   IMAGE_MIRROR: z.enum(['', 's3']).default(''),
   COMPTOOL_MIRROR_BASE: z.string().optional(),
   COMPTOOL_MIRROR_API_KEY: z.string().optional(),

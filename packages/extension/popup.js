@@ -17,16 +17,22 @@ function setStatus(kind, text) {
 }
 
 // ── Nav ────────────────────────────────────────────────────────────
+async function openWebPath(p) {
+  const { webUrl } = await window.swiftlist.settings();
+  if (!webUrl) {
+    setStatus('err', 'Web UI URL not set — open Config.');
+    return;
+  }
+  chrome.tabs.create({ url: `${webUrl}${p}` });
+}
+
 document.querySelectorAll('nav button[data-path]').forEach((btn) => {
-  btn.addEventListener('click', async () => {
-    const { webUrl } = await window.swiftlist.settings();
-    const path = btn.getAttribute('data-path');
-    if (!webUrl) {
-      setStatus('err', 'Web UI URL not set — open Config.');
-      return;
-    }
-    chrome.tabs.create({ url: `${webUrl}${path}` });
-  });
+  btn.addEventListener('click', () => openWebPath(btn.getAttribute('data-path')));
+});
+
+document.getElementById('open-webui').addEventListener('click', (e) => {
+  e.preventDefault();
+  openWebPath('/');
 });
 
 // ── Config panel toggle + persistence ──────────────────────────────
@@ -107,6 +113,123 @@ async function loadNeedsComps() {
   }
 }
 
+// ── Scan inbox + progress polling ──────────────────────────────────
+const scanBtn = document.getElementById('scan-btn');
+const scanFolder = document.getElementById('scan-folder');
+const progressWrap = document.getElementById('progress-wrap');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
+
+let pollHandle = null;
+let pollSession = null; // { startProcessed, startAiCalls, startErrors }
+
+async function refreshScanFolder() {
+  try {
+    const data = await window.swiftlist.api('/api/v1/ingest/status');
+    scanFolder.textContent = data.watchFolder || '';
+    scanFolder.title = data.watchFolder || '';
+    return data.status;
+  } catch {
+    scanFolder.textContent = '';
+    return null;
+  }
+}
+
+function fmtCost(n) {
+  if (!n || n <= 0) return '';
+  return ` · $${n.toFixed(3)}`;
+}
+
+function renderProgress(status, scanInfo) {
+  if (!status) {
+    progressWrap.classList.remove('visible');
+    return;
+  }
+  const { pending, processing, totalProcessed, totalErrors, totalAiCalls, totalAiCostUsd } = status;
+  const sessionProcessed = totalProcessed - (pollSession?.startProcessed ?? 0);
+  const sessionAi = totalAiCalls - (pollSession?.startAiCalls ?? 0);
+  const sessionErrors = totalErrors - (pollSession?.startErrors ?? 0);
+  const queuedInRun = scanInfo?.enqueued ?? 0;
+  const target = Math.max(queuedInRun, sessionProcessed + pending + processing);
+  const pct = target > 0 ? Math.min(100, Math.round((sessionProcessed / target) * 100)) : 0;
+
+  progressWrap.classList.add('visible');
+  progressFill.style.width = `${pct}%`;
+
+  const active = pending + processing > 0;
+  const statusLabel = active
+    ? `Recognizing ${sessionProcessed}/${target}${fmtCost(totalAiCostUsd)}`
+    : `<span class="ok">Done — ${sessionProcessed} processed${fmtCost(totalAiCostUsd)}</span>`;
+  const extra = [];
+  if (sessionAi > 0) extra.push(`${sessionAi} AI call${sessionAi === 1 ? '' : 's'}`);
+  if (sessionErrors > 0) extra.push(`<span class="err">${sessionErrors} error${sessionErrors === 1 ? '' : 's'}</span>`);
+  progressText.innerHTML = statusLabel + (extra.length ? ` · ${extra.join(' · ')}` : '');
+
+  if (!active && pollHandle) {
+    clearInterval(pollHandle);
+    pollHandle = null;
+  }
+}
+
+async function startScan() {
+  scanBtn.disabled = true;
+  scanBtn.textContent = 'Scanning…';
+  progressText.innerHTML = 'Enqueuing files…';
+  progressWrap.classList.add('visible');
+  progressFill.style.width = '5%';
+
+  let scanInfo = null;
+  try {
+    // Snapshot current counters so the bar reflects THIS run only.
+    const pre = await window.swiftlist.api('/api/v1/ingest/status');
+    pollSession = {
+      startProcessed: pre.status.totalProcessed,
+      startAiCalls: pre.status.totalAiCalls,
+      startErrors: pre.status.totalErrors,
+    };
+    scanInfo = await window.swiftlist.api('/api/v1/ingest/scan', { method: 'POST', body: '{}' });
+    if (scanInfo.truncated) {
+      progressText.innerHTML = `<span class="err">Truncated at ${scanInfo.enqueued} files (limit reached).</span>`;
+    }
+  } catch (err) {
+    progressText.innerHTML = `<span class="err">Scan failed: ${err.message}</span>`;
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Scan inbox';
+    return;
+  }
+
+  if (scanInfo.enqueued === 0) {
+    progressText.innerHTML = `<span class="ok">Nothing new — ${scanInfo.scanned} file${scanInfo.scanned === 1 ? '' : 's'} already known.</span>`;
+    progressFill.style.width = '100%';
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Scan inbox';
+    return;
+  }
+
+  scanBtn.textContent = 'Scanning…';
+  renderProgress(scanInfo.status, scanInfo);
+  if (pollHandle) clearInterval(pollHandle);
+  pollHandle = setInterval(async () => {
+    try {
+      const data = await window.swiftlist.api('/api/v1/ingest/status');
+      renderProgress(data.status, scanInfo);
+      const active = data.status.pending + data.status.processing > 0;
+      if (!active) {
+        scanBtn.disabled = false;
+        scanBtn.textContent = 'Scan inbox';
+      }
+    } catch (err) {
+      progressText.innerHTML = `<span class="err">Poll failed: ${err.message}</span>`;
+      clearInterval(pollHandle);
+      pollHandle = null;
+      scanBtn.disabled = false;
+      scanBtn.textContent = 'Scan inbox';
+    }
+  }, 2000);
+}
+
+scanBtn.addEventListener('click', startScan);
+
 // ── Boot ───────────────────────────────────────────────────────────
 async function refreshAll() {
   const { apiKey, baseUrl } = await window.swiftlist.settings();
@@ -121,6 +244,7 @@ async function refreshAll() {
     await window.swiftlist.ping();
     setStatus('ok', new URL(baseUrl).host);
     needsSection.style.display = '';
+    await refreshScanFolder();
     await loadNeedsComps();
   } catch (err) {
     setStatus('err', `Can't reach ${baseUrl}`);
