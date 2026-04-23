@@ -39,7 +39,42 @@ All three speak the [`UniversalItem`](../comptool/UNIVERSAL-ITEM-SCHEMA.md) sche
 
 ## Status
 
-**Phase 1 — Core UI + auth.** The server exposes `/items`, `/pool`, `/drafts`, `/devices`, `/settings/api-keys`, `/auth/{login,logout,me}`. The React web UI has real login (DB-backed users), Items/Detail, Pool, Drafts, Devices, and Settings (API-key management + password change). The Chrome extension ships with a popup config panel + cross-page nav. See [INSTALL.md](INSTALL.md) for a full setup.
+**Phase 1 — Core UI + auth + external-AI option.**
+
+- **Server** — `/auth/{login,logout,me}`, `/items` (+ `/:id/merge-into`, `/:id/photos/move`), `/pool`, `/drafts`, `/devices`, `/ingest/{scan,status,photo}`, `/settings/{api-keys,password,ai-provider,ingest-hint}`, `/extension/*`.
+- **Web UI** — DB-backed login (JWT cookie), Items list + Detail (photo multi-select, merge-into-another-item, move-selected-photos), Pool (un-grouped photos), Drafts, Devices, Settings (API keys + change password + ingest hint + vision-provider).
+- **Chrome extension** — popup is the config + nav surface: connection status, "Open web UI", 5 nav buttons into the web UI, inline config panel (baseUrl / apiKey / webUrl / vision-provider), **Scan inbox** button with a live progress bar that tracks image-recognition in real time, and a "N awaiting external AI" badge when the external-MCP path is in use.
+- **MCP server** (`@swiftlist/mcp-server`) — stdio MCP server exposing `list_pending_batches`, `get_batch`, `commit_batch`. Lets a Claude Code / Desktop session (running on the user's Claude Max subscription) do the vision inference in-context instead of swiftlist hitting the Anthropic API.
+
+See [INSTALL.md](INSTALL.md) for setup.
+
+### Vision providers
+
+Pick under Settings → Vision provider (web) or Config → Vision provider (extension popup):
+
+- `anthropic` (default) — swiftlist calls `anthropic.messages.create` directly, billed per-token against `ANTHROPIC_API_KEY`.
+- `external-mcp` — ingest queues an `ExternalAnalysisBatch` instead of calling Anthropic. A Claude Code session (via the MCP server) lists / claims / commits batches. Inference is billed against the user's Max sub, not the API key.
+- `mock` — no AI; useful for dev.
+
+### Use Claude Max via Claude Code
+
+1. Build once: `npm run build --workspace @swiftlist/mcp-server`.
+2. Add to your Claude Code config (`~/.config/claude-code/config.json`):
+
+   ```json
+   {
+     "mcpServers": {
+       "swiftlist": {
+         "command": "node",
+         "args": ["/absolute/path/to/swiftlist/packages/mcp-server/dist/index.js"],
+         "env": { "DATABASE_URL": "postgresql://swiftlist:swiftlist@localhost:5432/swiftlist?schema=swiftlist" }
+       }
+     }
+   }
+   ```
+
+3. Flip Vision provider to `external-mcp`. Ingest as usual (drop photos / hit Scan inbox); batches go QUEUED.
+4. In Claude Code: "list pending swiftlist batches, then for each, get_batch, analyze the images, and commit_batch with the result." The popup's badge counts down as batches commit.
 
 ## Quick start
 
@@ -84,3 +119,5 @@ npm run prisma:migrate -- --name init
 
 - We use **npm workspaces** (ships with Node 20). The plan originally specified pnpm — swap is trivial if you prefer pnpm later (`pnpm import` reads the existing lockfile).
 - The Chrome extension is plain vanilla JS with no bundler — same approach as comptool, so the mental model is identical across both extensions.
+- When the AI splits one physical object into multiple items (common failure mode), open the Item, multi-select the photos that belong on a different item, and **Move selected to…** — or use **Merge into…** to collapse the whole item into the correct one. Both actions re-compute completeness for the affected items.
+- The ingest hint (Settings → Ingest hint) is prepended to every vision prompt as "CATALOG CONTEXT from seller" and nudges Claude's grouping/titling — useful for steering toward inventory-specific language (e.g. "antique hardware; treat an assembled fixture as one item").
