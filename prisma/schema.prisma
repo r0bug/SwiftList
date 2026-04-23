@@ -292,6 +292,27 @@ model User {
   @@schema("swiftlist")
 }
 
+// Vision analysis queued for an EXTERNAL worker (e.g. Claude Code via MCP)
+// instead of a direct Anthropic API call. Created by IngestService when the
+// ai_provider setting is "external-mcp"; claimed + committed by a client.
+model ExternalAnalysisBatch {
+  id            String                      @id @default(cuid())
+  sourceFolder  String
+  status        ExternalAnalysisBatchStatus @default(QUEUED)
+  photoIds      String[]
+  continuation  Json?
+  result        Json?
+  claimedAt     DateTime?
+  claimedBy     String?
+  committedAt   DateTime?
+  error         String?
+  createdAt     DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+
+  @@index([status])
+  @@schema("swiftlist")
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Enums
 // ────────────────────────────────────────────────────────────────────
@@ -349,6 +370,15 @@ enum EbayDraftStatus {
   SUBMITTED
   ABANDONED
   UNKNOWN
+
+  @@schema("swiftlist")
+}
+
+enum ExternalAnalysisBatchStatus {
+  QUEUED
+  CLAIMED
+  COMMITTED
+  ERROR
 
   @@schema("swiftlist")
 }

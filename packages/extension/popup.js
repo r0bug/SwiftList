@@ -47,6 +47,14 @@ async function fillConfigForm() {
   document.getElementById('baseUrl').value = s.baseUrl;
   document.getElementById('apiKey').value = s.apiKey;
   document.getElementById('webUrl').value = s.webUrl;
+  // Best-effort: fetch current ai-provider from the server (needs JWT OR
+  // extension api-key, but this endpoint is jwt-only). Fall back silently.
+  try {
+    const res = await window.swiftlist.api('/api/v1/settings/ai-provider');
+    if (res && res.provider) document.getElementById('aiProvider').value = res.provider;
+  } catch {
+    // ignore — dropdown stays at its default
+  }
 }
 
 configForm.addEventListener('submit', async (e) => {
@@ -54,11 +62,21 @@ configForm.addEventListener('submit', async (e) => {
   const apiKey = document.getElementById('apiKey').value.trim();
   const baseUrl = document.getElementById('baseUrl').value.trim().replace(/\/$/, '');
   const webUrl = document.getElementById('webUrl').value.trim().replace(/\/$/, '');
+  const aiProvider = document.getElementById('aiProvider').value;
   await chrome.storage.sync.set({ apiKey, baseUrl, webUrl });
   configMsg.textContent = 'Saved. Testing…';
   configMsg.className = 'msg';
   try {
     await window.swiftlist.ping();
+    // Persist provider on the server (needs valid api key first, hence here).
+    try {
+      await window.swiftlist.api('/api/v1/settings/ai-provider', {
+        method: 'PUT',
+        body: JSON.stringify({ provider: aiProvider }),
+      });
+    } catch (err) {
+      console.warn('[swiftlist] could not save ai-provider', err);
+    }
     configMsg.textContent = 'Connected.';
     configMsg.className = 'msg status ok';
     await refreshAll();
@@ -128,10 +146,29 @@ async function refreshScanFolder() {
     const data = await window.swiftlist.api('/api/v1/ingest/status');
     scanFolder.textContent = data.watchFolder || '';
     scanFolder.title = data.watchFolder || '';
+    updateMcpBadge(data.externalMcp);
     return data.status;
   } catch {
     scanFolder.textContent = '';
+    updateMcpBadge(null);
     return null;
+  }
+}
+
+function updateMcpBadge(ext) {
+  const el = document.getElementById('mcp-badge');
+  if (!ext) {
+    el.classList.remove('visible');
+    el.textContent = '';
+    return;
+  }
+  const total = (ext.queued || 0) + (ext.claimed || 0);
+  if (total === 0) {
+    el.classList.remove('visible');
+    el.textContent = '';
+  } else {
+    el.classList.add('visible');
+    el.textContent = `${total} awaiting external AI`;
   }
 }
 
@@ -213,6 +250,7 @@ async function startScan() {
     try {
       const data = await window.swiftlist.api('/api/v1/ingest/status');
       renderProgress(data.status, scanInfo);
+      updateMcpBadge(data.externalMcp);
       const active = data.status.pending + data.status.processing > 0;
       if (!active) {
         scanBtn.disabled = false;

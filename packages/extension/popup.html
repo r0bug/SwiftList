@@ -54,7 +54,10 @@
       form.config { display: none; }
       form.config.visible { display: block; }
       form.config label { display: block; font-size: 11px; color: #aaa; margin-top: 8px; }
-      form.config input { width: 100%; padding: 5px 7px; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; margin-top: 3px; font-size: 12px; }
+      form.config input, form.config select { width: 100%; padding: 5px 7px; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; margin-top: 3px; font-size: 12px; }
+      .status-col { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+      .mcp-badge { font-size: 10px; color: #ea4; background: #2a2a12; border: 1px solid #554818; border-radius: 10px; padding: 1px 6px; display: none; }
+      .mcp-badge.visible { display: inline-block; }
       form.config .actions { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
       form.config button[type=submit] { background: #4a8; color: #111; border: 0; border-radius: 3px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
       form.config button.ghost { background: transparent; color: #999; border: 0; padding: 4px 6px; font-size: 11px; cursor: pointer; text-decoration: underline; }
@@ -68,7 +71,10 @@
         <h1>swiftlist</h1>
         <a href="#" id="open-webui" class="sublink">Open web UI →</a>
       </div>
-      <span id="status" class="status"><span class="dot"></span><span id="status-text">Checking…</span></span>
+      <div class="status-col">
+        <span id="status" class="status"><span class="dot"></span><span id="status-text">Checking…</span></span>
+        <span id="mcp-badge" class="mcp-badge" title="Batches awaiting external AI"></span>
+      </div>
     </header>
 
     <nav id="nav">
@@ -101,6 +107,13 @@
         </label>
         <label>Web UI URL
           <input id="webUrl" placeholder="http://localhost:5173" />
+        </label>
+        <label>Vision provider
+          <select id="aiProvider">
+            <option value="anthropic">Anthropic API (per-token billing)</option>
+            <option value="external-mcp">External MCP (Claude Max / Code)</option>
+            <option value="mock">Mock (no AI)</option>
+          </select>
         </label>
         <div class="actions">
           <button type="submit">Save &amp; test</button>

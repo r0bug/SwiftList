@@ -7,7 +7,8 @@
     "packages/shared",
     "packages/server",
     "packages/watcher",
-    "packages/client"
+    "packages/client",
+    "packages/mcp-server"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

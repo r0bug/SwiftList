@@ -28,6 +28,7 @@ import { clusterPhotos, type PhotoCandidate } from './grouping.service.js';
 import { aiService, type PhotoForAnalysis } from './ai.service.js';
 import { computeCompleteness } from '../util/completeness.js';
 import { hostItemImages } from './imageHosting.service.js';
+import { loadAiProvider } from '../routes/settings.routes.js';
 
 const DEBOUNCE_MS = 1500;
 const CONTINUATION_LOOKBACK_MS = 5 * 60_000;
@@ -230,6 +231,23 @@ class IngestService {
               .filter(Boolean) as string[],
           }
         : undefined;
+
+    // Vision provider routing. For 'external-mcp' we queue and bail — an
+    // MCP client (e.g. Claude Code using the user's Max sub) will claim and
+    // commit the batch via the MCP tool surface.
+    const provider = await loadAiProvider();
+    if (provider === 'external-mcp') {
+      await prisma.externalAnalysisBatch.create({
+        data: {
+          sourceFolder,
+          status: 'QUEUED',
+          photoIds: cluster.map((p) => p.id),
+          continuation: (continuation as unknown as Prisma.InputJsonValue) ?? undefined,
+        },
+      });
+      logger.info({ sourceFolder, count: cluster.length }, 'queued external-analysis batch');
+      return;
+    }
 
     const { result, costUsd } = await aiService.analyze({
       photos: photosForAi,

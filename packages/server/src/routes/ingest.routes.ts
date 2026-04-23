@@ -6,6 +6,7 @@ import { apiKeyAuth, apiKeyOrJwt } from '../middleware/auth.js';
 import { ingestService } from '../services/ingest.service.js';
 import { scanInbox } from '../services/scanInbox.service.js';
 import { env } from '../config/env.js';
+import { prisma } from '../db/prisma.js';
 
 const router = Router();
 
@@ -46,10 +47,15 @@ router.post('/scan', apiKeyOrJwt, async (req, res) => {
   res.json({ ...result, status: ingestService.getStatus() });
 });
 
-router.get('/status', apiKeyOrJwt, (_req, res) => {
+router.get('/status', apiKeyOrJwt, async (_req, res) => {
+  const [queued, claimed] = await Promise.all([
+    prisma.externalAnalysisBatch.count({ where: { status: 'QUEUED' } }),
+    prisma.externalAnalysisBatch.count({ where: { status: 'CLAIMED' } }),
+  ]);
   res.json({
     status: ingestService.getStatus(),
     watchFolder: resolveWatchFolder(),
+    externalMcp: { queued, claimed },
   });
 });
 

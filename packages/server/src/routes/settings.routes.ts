@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../db/prisma.js';
-import { jwtAuth } from '../middleware/auth.js';
+import { jwtAuth, apiKeyOrJwt } from '../middleware/auth.js';
 import { sha256String } from '../util/sha256.js';
 import { pstr } from '../util/req.js';
 
@@ -94,6 +94,39 @@ router.post('/password', jwtAuth, async (req, res) => {
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
   res.json({ ok: true });
+});
+
+// ── AI provider (anthropic | external-mcp | mock) ──────────────────────
+
+const AI_PROVIDER_KEY = 'ai_provider';
+const AI_PROVIDERS = ['anthropic', 'external-mcp', 'mock'] as const;
+type AiProvider = (typeof AI_PROVIDERS)[number];
+
+export async function loadAiProvider(): Promise<AiProvider> {
+  const row = await prisma.setting.findUnique({ where: { key: AI_PROVIDER_KEY } });
+  const v = (row?.value as { value?: string } | null)?.value;
+  if (v && (AI_PROVIDERS as readonly string[]).includes(v)) return v as AiProvider;
+  return 'anthropic';
+}
+
+router.get('/ai-provider', apiKeyOrJwt, async (_req, res) => {
+  res.json({ provider: await loadAiProvider(), options: AI_PROVIDERS });
+});
+
+const AiProviderSchema = z.object({ provider: z.enum(AI_PROVIDERS) });
+
+router.put('/ai-provider', apiKeyOrJwt, async (req, res) => {
+  const parsed = AiProviderSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid body', issues: parsed.error.issues });
+    return;
+  }
+  await prisma.setting.upsert({
+    where: { key: AI_PROVIDER_KEY },
+    create: { key: AI_PROVIDER_KEY, value: { value: parsed.data.provider } },
+    update: { value: { value: parsed.data.provider } },
+  });
+  res.json({ provider: parsed.data.provider });
 });
 
 // ── Ingest hint (global AI prompt augmentation) ────────────────────────
