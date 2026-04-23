@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Auto-bump packages/extension/manifest.json patch version when the
+# extension's source files are staged. Skip conditions are documented
+# inline — set SWIFTLIST_SKIP_BUMP=1 to bypass entirely.
+
+set -e
+
+if [ -n "${SWIFTLIST_SKIP_BUMP:-}" ]; then
+  exit 0
+fi
+
+# Files staged under packages/extension/, excluding icons, markdown,
+# the gitignored defaults.js, and the manifest itself (we'll handle
+# that case separately below).
+staged=$(git diff --cached --name-only --diff-filter=ACMR \
+  | grep -E '^packages/extension/' \
+  | grep -vE '^packages/extension/(icons/|defaults\.js$|manifest\.json$|.*\.md$|.*\.markdown$)' \
+  || true)
+
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+manifest="packages/extension/manifest.json"
+
+# If the user is already editing the version line themselves, don't
+# stomp their bump.
+if git diff --cached --name-only | grep -qx "$manifest"; then
+  if git diff --cached -- "$manifest" | grep -qE '^\+\s*"version":'; then
+    exit 0
+  fi
+fi
+
+# Regex-edit the version line to preserve every byte of surrounding
+# formatting. Node is already a repo prereq; no jq dependency.
+new_version=$(node -e '
+  const fs = require("fs");
+  const path = "'"$manifest"'";
+  const text = fs.readFileSync(path, "utf8");
+  const m = text.match(/("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")/);
+  if (!m) { process.stderr.write("manifest.json has no version line\n"); process.exit(1); }
+  const [, pre, major, minor, patch, post] = m;
+  const bumped = `${pre}${major}.${minor}.${Number(patch) + 1}${post}`;
+  fs.writeFileSync(path, text.replace(m[0], bumped));
+  process.stdout.write(`${major}.${minor}.${Number(patch) + 1}`);
+')
+
+git add "$manifest"
+echo "[swiftlist] pre-commit: bumped extension manifest to $new_version"

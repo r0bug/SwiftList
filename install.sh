@@ -349,6 +349,24 @@ mint_extension_key() {
   return 0
 }
 
+install_git_hooks() {
+  # Point git at the versioned hooks/ dir. Local repo config only; doesn't
+  # touch the user's global git config. Skip gracefully if not a git repo.
+  if [ ! -d .git ]; then
+    dim "  (not a git repo — skipping git hook install)"
+    return 0
+  fi
+  local current
+  current=$(git config --local --get core.hooksPath 2>/dev/null || echo "")
+  if [ "$current" = "hooks" ]; then
+    grn "✓ Git hooks already installed (core.hooksPath=hooks)"
+    return 0
+  fi
+  git config --local core.hooksPath hooks
+  grn "✓ Installed git hooks (core.hooksPath=hooks)"
+  return 0
+}
+
 write_extension_defaults() {
   # Bundle the minted key + local URLs into packages/extension/defaults.js
   # so the Chrome extension is pre-configured on Load unpacked. Idempotent —
@@ -395,6 +413,7 @@ STEPS=(
   prisma_seed
   mint_extension_key
   write_extension_defaults
+  install_git_hooks
 )
 
 declare -A DONE=()
@@ -425,6 +444,7 @@ for step in "${STEPS[@]}"; do
         prisma_seed)           echo "  Check the seed script in prisma/seed.ts, then re-run";;
         mint_extension_key)    echo "  See log above. You can re-run ./install.sh to retry.";;
         write_extension_defaults) echo "  Check packages/extension is writable";;
+        install_git_hooks)     echo "  Check you're inside a git repo; re-run ./install.sh";;
       esac
       exit 1
     fi
