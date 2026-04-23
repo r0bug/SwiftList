@@ -7,14 +7,12 @@
 //       sha256 → dedup check
 //       exif + perceptualHash
 //       sharp optimized + thumbnail
-//       persist Photo (no item yet, no group yet)
-//     cluster the batch (deterministic) → candidate PhotoGroups
-//     for each candidate, look for an in-folder Item to continue
-//     send each candidate to Claude (multi-image), with continuation hint
-//     persist results in one transaction:
-//       create new Items OR attach photos to existing Item
-//       upsert PhotoGroup, update photos, write IngestEvents
-//       recompute Item.completeness
+//       persist Photo (unattached: no item, no group)
+//
+// Manual-grouping mode (2026-04): the pipeline stops here. Photos live in
+// the pool until the user explicitly groups them and triggers identification
+// from the /groups UI. Clustering + LLM analysis are driven by dedicated
+// endpoints rather than by the watcher.
 
 import path from 'node:path';
 import type { Prisma } from '../generated/prisma/index.js';
@@ -24,21 +22,22 @@ import { sha256File } from '../util/sha256.js';
 import { perceptualHash } from '../util/perceptualHash.js';
 import { readExif, filenameNumericSuffix } from '../util/exif.js';
 import { processImage, pendingGroupDir } from './image.service.js';
-import { clusterPhotos, type PhotoCandidate } from './grouping.service.js';
-import { aiService, type PhotoForAnalysis } from './ai.service.js';
-import { computeCompleteness } from '../util/completeness.js';
-import { hostItemImages } from './imageHosting.service.js';
-import { loadAiProvider } from '../routes/settings.routes.js';
 
 const DEBOUNCE_MS = 1500;
-const CONTINUATION_LOOKBACK_MS = 5 * 60_000;
-const HIGH_CONFIDENCE = 0.75;
-const LOW_CONFIDENCE = 0.6;
 
 interface PendingFile {
   path: string;
   watchFolderId?: string;
   arrivedAt: number;
+}
+
+interface PersistedPhoto {
+  id: string;
+  sourceFolder: string;
+  filename: string;
+  filenameNumeric: number | null;
+  capturedAt: Date | null;
+  perceptualHash: string | null;
 }
 
 export interface IngestStatus {
@@ -106,7 +105,7 @@ class IngestService {
     this.status.processing += files.length;
 
     // Step 1: per-file persistence. Photos are inserted unattached.
-    const persisted: PhotoCandidate[] = [];
+    const persisted: PersistedPhoto[] = [];
     for (const f of files) {
       try {
         const sha256 = await sha256File(f.path);
@@ -169,248 +168,14 @@ class IngestService {
       }
     }
 
-    // Persisted files count toward totalProcessed once their cluster resolves.
-    if (persisted.length === 0) {
-      this.status.processing = Math.max(0, this.status.processing - files.length);
-      return;
-    }
-
-    // Step 2: cluster.
-    const { clusters } = clusterPhotos(persisted);
-    logger.info({ clusters: clusters.length }, 'clustered batch');
-
-    // Step 3: per-cluster LLM disambiguation.
-    for (const cluster of clusters) {
-      try {
-        await this.processCluster(cluster, sourceFolder);
-        this.bump('totalProcessed', cluster.length);
-      } catch (err) {
-        logger.error({ err, sourceFolder }, 'cluster processing failed');
-        this.bump('totalErrors', cluster.length);
-        this.bump('totalProcessed', cluster.length);
-      }
-    }
-    // processing -= file count for this batch; use files.length so pre-AI
-    // errors are also drained.
+    // Manual-grouping mode (2026-04): photos land in the pool (itemId +
+    // photoGroupId both null) and stay there until the user explicitly
+    // groups them and triggers identification. No auto-cluster, no auto-LLM,
+    // no auto-queue to external-MCP.
+    this.bump('totalProcessed', persisted.length);
     this.status.processing = Math.max(0, this.status.processing - files.length);
   }
 
-  private async processCluster(cluster: PhotoCandidate[], sourceFolder: string): Promise<void> {
-    // Continuation candidate: most recent ASSIGNED group in same folder within 5 min.
-    const recentGroup = await prisma.photoGroup.findFirst({
-      where: {
-        sourceFolder,
-        status: 'ASSIGNED',
-        itemId: { not: null },
-        lastCapturedAt: { gte: new Date(Date.now() - CONTINUATION_LOOKBACK_MS) },
-      },
-      orderBy: { lastCapturedAt: 'desc' },
-      include: { item: true, photos: { take: 2, orderBy: { order: 'asc' } } },
-    });
-
-    const photosForAi: PhotoForAnalysis[] = await Promise.all(
-      cluster.map(async (p, i) => {
-        const photo = await prisma.photo.findUnique({ where: { id: p.id } });
-        return {
-          index: i + 1,
-          filePath: photo?.optimizedPath || photo?.originalPath || '',
-          filename: p.filename,
-          capturedAt: p.capturedAt,
-          perceptualHash: p.perceptualHash,
-        };
-      }),
-    );
-
-    const continuation =
-      recentGroup?.item && recentGroup.photos.length > 0
-        ? {
-            itemId: recentGroup.item.id,
-            itemTitle: recentGroup.item.title ?? '(no title)',
-            representativePhotoPaths: recentGroup.photos
-              .map((p) => p.optimizedPath || p.originalPath)
-              .filter(Boolean) as string[],
-          }
-        : undefined;
-
-    // Vision provider routing. For 'external-mcp' we queue and bail — an
-    // MCP client (e.g. Claude Code using the user's Max sub) will claim and
-    // commit the batch via the MCP tool surface.
-    const provider = await loadAiProvider();
-    if (provider === 'external-mcp') {
-      await prisma.externalAnalysisBatch.create({
-        data: {
-          sourceFolder,
-          status: 'QUEUED',
-          photoIds: cluster.map((p) => p.id),
-          continuation: (continuation as unknown as Prisma.InputJsonValue) ?? undefined,
-        },
-      });
-      logger.info({ sourceFolder, count: cluster.length }, 'queued external-analysis batch');
-      return;
-    }
-
-    const { result, costUsd } = await aiService.analyze({
-      photos: photosForAi,
-      continuation,
-    });
-    this.bump('totalAiCalls', 1);
-    this.bump('totalAiCostUsd', costUsd);
-
-    // Step 4: persist results in a transaction.
-    await prisma.$transaction(async (tx) => {
-      const firstCapturedAt = cluster
-        .map((c) => c.capturedAt)
-        .filter((d): d is Date => !!d)
-        .sort((a, b) => a.getTime() - b.getTime())[0];
-      const lastCapturedAt = cluster
-        .map((c) => c.capturedAt)
-        .filter((d): d is Date => !!d)
-        .sort((a, b) => b.getTime() - a.getTime())[0];
-      const filenameNumerics = cluster
-        .map((c) => c.filenameNumeric)
-        .filter((n): n is number => n !== null);
-
-      const group = await tx.photoGroup.create({
-        data: {
-          sourceFolder,
-          firstFilenameNumeric: filenameNumerics[0] ?? null,
-          lastFilenameNumeric: filenameNumerics[filenameNumerics.length - 1] ?? null,
-          firstCapturedAt: firstCapturedAt ?? null,
-          lastCapturedAt: lastCapturedAt ?? null,
-          status: 'ANALYZING',
-          llmDecision: result as unknown as Prisma.InputJsonValue,
-        },
-      });
-
-      for (const aiGroup of result.groups) {
-        const memberPhotoIds = aiGroup.photoIndices
-          .map((idx) => cluster[idx - 1]?.id)
-          .filter((id): id is string => !!id);
-        if (memberPhotoIds.length === 0) continue;
-
-        const isContinuation =
-          aiGroup.isContinuationOfExistingItem &&
-          aiGroup.existingItemMatchConfidence >= HIGH_CONFIDENCE &&
-          continuation;
-
-        let itemId: string;
-        let decision: 'NEW_ITEM' | 'ADDED_TO_ITEM' | 'GROUPED_PENDING';
-
-        if (aiGroup.confidence < LOW_CONFIDENCE && !isContinuation) {
-          // Low confidence: leave photos in the group, no Item yet.
-          await tx.photoGroup.update({
-            where: { id: group.id },
-            data: { status: 'PENDING' },
-          });
-          await tx.photo.updateMany({
-            where: { id: { in: memberPhotoIds } },
-            data: { photoGroupId: group.id },
-          });
-          for (const pid of memberPhotoIds) {
-            await tx.ingestEvent.create({
-              data: {
-                path: '',
-                sha256: '',
-                decision: 'GROUPED_PENDING',
-                groupId: group.id,
-                llmCostUsd: costUsd,
-              },
-            });
-          }
-          continue;
-        }
-
-        if (isContinuation) {
-          itemId = continuation.itemId;
-          decision = 'ADDED_TO_ITEM';
-          await tx.item.update({
-            where: { id: itemId },
-            data: { aiCost: { increment: costUsd } },
-          });
-        } else {
-          const draft = aiGroup.item;
-          const newItem = await tx.item.create({
-            data: {
-              title: draft.title,
-              description: draft.description,
-              brand: draft.brand ?? null,
-              model: draft.model ?? null,
-              category: draft.category,
-              ebayCategoryId: draft.ebayCategoryId,
-              condition: draft.condition,
-              conditionId: draft.conditionId,
-              features: draft.features,
-              keywords: draft.keywords,
-              itemSpecifics: draft.itemSpecifics as unknown as Prisma.InputJsonValue,
-              upc: draft.upc ?? null,
-              isbn: draft.isbn ?? null,
-              mpn: draft.mpn ?? null,
-              status: 'DRAFT',
-              stage: 'IDENTIFIED',
-              sourceFolder,
-              aiAnalysis: aiGroup as unknown as Prisma.InputJsonValue,
-              aiCost: costUsd,
-            },
-          });
-          itemId = newItem.id;
-          decision = 'NEW_ITEM';
-        }
-
-        await tx.photo.updateMany({
-          where: { id: { in: memberPhotoIds } },
-          data: { itemId, photoGroupId: group.id },
-        });
-
-        await tx.photoGroup.update({
-          where: { id: group.id },
-          data: { itemId, status: 'ASSIGNED' },
-        });
-
-        for (const pid of memberPhotoIds) {
-          await tx.ingestEvent.create({
-            data: {
-              path: '',
-              sha256: '',
-              decision,
-              itemId,
-              groupId: group.id,
-              llmCostUsd: costUsd,
-            },
-          });
-        }
-      }
-    });
-
-    // Step 5: rename pending dirs to real slug + recompute completeness.
-    // Done outside the transaction since it touches the filesystem.
-    if (recentGroup) await this.recomputeCompleteness(recentGroup.itemId!);
-    for (const aiGroup of result.groups) {
-      const firstPhotoIdx = aiGroup.photoIndices[0];
-      if (firstPhotoIdx === undefined) continue;
-      const photo = await prisma.photo.findUnique({
-        where: { id: cluster[firstPhotoIdx - 1]!.id },
-      });
-      if (photo?.itemId) {
-        await hostItemImages(photo.itemId).catch((err) =>
-          logger.error({ err, itemId: photo.itemId }, 'hostItemImages failed'),
-        );
-        await this.recomputeCompleteness(photo.itemId);
-      }
-    }
-  }
-
-  private async recomputeCompleteness(itemId: string): Promise<void> {
-    const item = await prisma.item.findUnique({
-      where: { id: itemId },
-      include: { photos: { select: { id: true } } },
-    });
-    if (!item) return;
-    const report = computeCompleteness({ ...item, hasPhotos: item.photos.length > 0 });
-    await prisma.item.update({
-      where: { id: itemId },
-      data: { completeness: report as unknown as Prisma.InputJsonValue },
-    });
-  }
 }
 
 export const ingestService = new IngestService();

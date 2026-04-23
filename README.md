@@ -16,16 +16,16 @@ All three speak the [`UniversalItem`](../comptool/UNIVERSAL-ITEM-SCHEMA.md) sche
 ┌─ camera / phone ─┐    ┌─ swiftlist-watcher ─┐    ┌─ swiftlist server ─┐
 │  USB plug event  │───▶│  chokidar + USB     │───▶│  ingest pipeline    │
 │  /home/.../Photos│    │  importer (DCIM/)   │    │  sha256 → exif →    │
-└──────────────────┘    └─────────────────────┘    │  phash → cluster →  │
-                                                   │  Claude Sonnet 4.6  │
-                                                   │  → Item + Photos    │
+└──────────────────┘    └─────────────────────┘    │  phash → Photo row  │
+                                                   │  (no auto-grouping) │
                                                    └────────┬────────────┘
                                                             ▼
               ┌─ React web UI ─┐               ┌─ Postgres (swiftlist schema) ─┐
-              │  edit, regroup,│◀─────────────▶│  Item, Photo, PhotoGroup,     │
-              │  set primary,  │               │  EbayDraft, SoldCompLink,…    │
-              │  view drafts   │               └────────────┬──────────────────┘
-              └────────────────┘                            ▼
+              │  Pool  (pick)  │───group──────▶│  PhotoGroup (unidentified)    │
+              │  Folder        │──identify────▶│  Item (IN_PROCESS → DRAFT)    │
+              │  Items filter  │◀─────────────▶│  EbayDraft, SoldCompLink,…    │
+              └────────────────┘               └────────────┬──────────────────┘
+                                                            ▼
                                               ┌─ Chrome MV3 extension ─┐
                                               │  content-sold:    find │
                                               │  content-detail:  pull │
@@ -37,12 +37,14 @@ All three speak the [`UniversalItem`](../comptool/UNIVERSAL-ITEM-SCHEMA.md) sche
                                                        ebay.com
 ```
 
+Identification is **user-driven**: photos land in the Pool, the user selects some into a folder (`PhotoGroup`), then drills into the folder and triggers either AI identification (with optional context hint) or eBay image-search + comp-match. AI spend is gated behind an explicit action — no silent billing on watcher activity.
+
 ## Status
 
 **Phase 1 — Core UI + auth + external-AI option.**
 
-- **Server** — `/auth/{login,logout,me}`, `/items` (+ `/:id/merge-into`, `/:id/photos/move`), `/pool`, `/drafts`, `/devices`, `/ingest/{scan,status,photo}`, `/settings/{api-keys,password,ai-provider,ingest-hint}`, `/extension/*`.
-- **Web UI** — DB-backed login (JWT cookie), Items list + Detail (photo multi-select, merge-into-another-item, move-selected-photos), Pool (un-grouped photos), Drafts, Devices, Settings (API keys + change password + ingest hint + vision-provider).
+- **Server** — `/auth/{login,logout,me}`, `/items` (+ `/:id/merge-into`, `/:id/photos/move`), `/pool`, `/groups` (manual grouping lifecycle), `/photos/:id` (hard-delete), `/drafts`, `/devices`, `/ingest/{scan,status,photo}`, `/settings/{api-keys,password,ai-provider,ingest-hint}`, `/extension/*`.
+- **Web UI** — DB-backed login (JWT cookie), Items with filter tabs (Unidentified / In-process / Drafts / Listed / Sold), Item Detail (photo multi-select, merge-into-another-item, move-selected-photos), Pool (select + Group), Folder Detail (`/groups/:id`: add/remove/delete photos, placeholders for Run-AI and eBay-image-search), Drafts, Devices, Settings.
 - **Chrome extension** — popup is the config + nav surface: connection status, "Open web UI", 5 nav buttons into the web UI, inline config panel (baseUrl / apiKey / webUrl / vision-provider), **Scan inbox** button with a live progress bar that tracks image-recognition in real time, and a "N awaiting external AI" badge when the external-MCP path is in use.
 - **MCP server** (`@swiftlist/mcp-server`) — stdio MCP server exposing `list_pending_batches`, `get_batch`, `commit_batch`. Lets a Claude Code / Desktop session (running on the user's Claude Max subscription) do the vision inference in-context instead of swiftlist hitting the Anthropic API.
 
@@ -119,5 +121,6 @@ npm run prisma:migrate -- --name init
 
 - We use **npm workspaces** (ships with Node 20). The plan originally specified pnpm — swap is trivial if you prefer pnpm later (`pnpm import` reads the existing lockfile).
 - The Chrome extension is plain vanilla JS with no bundler — same approach as comptool, so the mental model is identical across both extensions.
-- When the AI splits one physical object into multiple items (common failure mode), open the Item, multi-select the photos that belong on a different item, and **Move selected to…** — or use **Merge into…** to collapse the whole item into the correct one. Both actions re-compute completeness for the affected items.
-- The ingest hint (Settings → Ingest hint) is prepended to every vision prompt as "CATALOG CONTEXT from seller" and nudges Claude's grouping/titling — useful for steering toward inventory-specific language (e.g. "antique hardware; treat an assembled fixture as one item").
+- When the AI splits one physical object into multiple items after identification, open the Item, multi-select the photos that belong on a different item, and **Move selected to…** — or use **Merge into…** to collapse the whole item into the correct one. Both actions re-compute completeness for the affected items.
+- The ingest hint (Settings → Ingest hint) is a global fallback context — the folder-level identification UI also accepts a per-run context text field which is preferred over the global hint when set.
+- **Manual-grouping flow** (2026-04): the watcher no longer auto-identifies. New photos always land in the Pool. Select photos → Group → drill into the folder (`New-Item-N`) → Run AI identification (optional context) or eBay image search. Identification moves the group into the Items list under `IN_PROCESS` status; the user promotes to `DRAFT` when ready. This makes AI spend explicit and kills surprise queue backlogs on noisy watcher activity.

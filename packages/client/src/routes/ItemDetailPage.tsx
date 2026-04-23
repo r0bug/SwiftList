@@ -357,7 +357,7 @@ function ItemPicker({
   const [q, setQ] = useState('');
   const { data } = useQuery({
     queryKey: ['items', q],
-    queryFn: () => api.listItems(q || undefined),
+    queryFn: () => api.listItems({ q: q || undefined }),
   });
   const items = useMemo(() => (data?.items ?? []).filter((i) => i.id !== excludeId), [data, excludeId]);
 

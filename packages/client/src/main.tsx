@@ -7,6 +7,7 @@ import { ItemsPage } from './routes/ItemsPage.js';
 import { ItemDetailPage } from './routes/ItemDetailPage.js';
 import { LoginPage } from './routes/LoginPage.js';
 import { PoolPage } from './routes/PoolPage.js';
+import { GroupDetailPage } from './routes/GroupDetailPage.js';
 import { DraftsPage } from './routes/DraftsPage.js';
 import { DevicesPage } from './routes/DevicesPage.js';
 import { SettingsPage } from './routes/SettingsPage.js';
@@ -81,6 +82,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                       <Route path="/" element={<ItemsPage />} />
                       <Route path="/items/:id" element={<ItemDetailPage />} />
                       <Route path="/pool" element={<PoolPage />} />
+                      <Route path="/groups/:id" element={<GroupDetailPage />} />
                       <Route path="/drafts" element={<DraftsPage />} />
                       <Route path="/devices" element={<DevicesPage />} />
                       <Route path="/settings" element={<SettingsPage />} />

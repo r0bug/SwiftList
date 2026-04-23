@@ -37,10 +37,13 @@ export const api = {
     }),
   logout: () => http<{ ok: true }>('/auth/logout', { method: 'POST' }),
   me: () => http<Me>('/auth/me'),
-  listItems: (q?: string) =>
-    http<{ items: ItemRow[]; nextCursor: string | null }>(
-      `/items${q ? `?q=${encodeURIComponent(q)}` : ''}`,
-    ),
+  listItems: (params?: { q?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set('q', params.q);
+    if (params?.status) qs.set('status', params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return http<{ items: ItemRow[]; nextCursor: string | null }>(`/items${suffix}`);
+  },
   getItem: (id: string) => http<ItemDetail>(`/items/${id}`),
   patchItem: (id: string, body: Partial<ItemDetail>) =>
     http<ItemDetail>(`/items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -48,6 +51,25 @@ export const api = {
     http<{ photos: PoolPhoto[]; nextCursor: string | null; total: number }>(
       `/pool${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
     ),
+  createGroup: (photoIds: string[], label?: string) =>
+    http<{ id: string; label: string | null; photoCount: number }>('/groups', {
+      method: 'POST',
+      body: JSON.stringify({ photoIds, label }),
+    }),
+  listGroups: (unidentifiedOnly = true) =>
+    http<{ groups: GroupRow[] }>(`/groups?unidentified=${unidentifiedOnly ? 'true' : 'false'}`),
+  getGroup: (id: string) => http<GroupDetail>(`/groups/${id}`),
+  addPhotosToGroup: (groupId: string, photoIds: string[]) =>
+    http<{ ok: true; added: number }>(`/groups/${groupId}/photos`, {
+      method: 'POST',
+      body: JSON.stringify({ photoIds }),
+    }),
+  removePhotoFromGroup: (groupId: string, photoId: string) =>
+    http<{ ok: true }>(`/groups/${groupId}/photos/${photoId}`, { method: 'DELETE' }),
+  deleteGroup: (groupId: string) =>
+    http<{ ok: true }>(`/groups/${groupId}`, { method: 'DELETE' }),
+  deletePhoto: (photoId: string) =>
+    http<{ ok: true }>(`/photos/${photoId}`, { method: 'DELETE' }),
   listDrafts: (cursor?: string) =>
     http<{ drafts: DraftRow[]; nextCursor: string | null }>(
       `/drafts${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
@@ -153,6 +175,38 @@ export interface PoolPhoto {
   originalPath: string | null;
   createdAt: string;
   photoGroupId: string | null;
+}
+
+export interface GroupRow {
+  id: string;
+  label: string | null;
+  itemId: string | null;
+  status: string;
+  createdAt: string;
+  photoCount: number;
+  coverPhoto: {
+    id: string;
+    thumbnailPath: string | null;
+    publicUrl: string | null;
+    cdnUrl: string | null;
+  } | null;
+}
+
+export interface GroupDetail {
+  id: string;
+  label: string | null;
+  itemId: string | null;
+  status: string;
+  createdAt: string;
+  item: { id: string; title: string | null; status: string; stage: string } | null;
+  photos: Array<{
+    id: string;
+    thumbnailPath: string | null;
+    publicUrl: string | null;
+    cdnUrl: string | null;
+    originalPath: string | null;
+    createdAt: string;
+  }>;
 }
 
 export interface ItemRow {

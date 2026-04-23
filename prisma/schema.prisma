@@ -103,6 +103,7 @@ model Photo {
 model PhotoGroup {
   id                   String           @id @default(cuid())
   itemId               String?
+  label                String?
   sourceFolder         String
   firstFilenameNumeric Int?
   lastFilenameNumeric  Int?
@@ -318,6 +319,7 @@ model ExternalAnalysisBatch {
 // ────────────────────────────────────────────────────────────────────
 
 enum ItemStatus {
+  IN_PROCESS
   DRAFT
   READY
   LISTED

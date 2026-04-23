@@ -1,45 +1,67 @@
 # swiftlist — session handoff
 
-Auto-loaded by Claude Code. Written 2026-04-23 right after registering the
-swiftlist MCP server in user scope. Keep this file short; delete or fold
-into another doc once the in-flight work below is done.
+Auto-loaded by Claude Code. Keep this file short; delete or fold into another
+doc once the in-flight work below is done.
 
-## First thing to do in this session
+## Where we are (2026-04-23)
 
-There is **1 `ExternalAnalysisBatch` row in QUEUED state** at
-`/home/robug/swiftlist/inbox`. Vision provider was flipped to `external-mcp`
-during testing and some ingests queued up waiting for a Claude Max / Claude
-Code worker (this session). The user wants it drained.
+**Manual-grouping scaffolding just landed.** The watcher no longer triggers
+AI identification automatically. New photos create `Photo` rows only (no
+`PhotoGroup`, no `Item`, no `ExternalAnalysisBatch` queue). Identification is
+user-driven from the web UI:
 
-**Workflow:**
+- **/pool** — unassigned thumbnails, multi-select + "Group Selected" button.
+- **/groups/:id** — folder detail. Shows the grouped photos, per-photo
+  Remove-from-group and hard-Delete buttons, "+ Add photos from pool", and
+  **placeholder** buttons for "Run AI identification" and "eBay image search"
+  (disabled in this PR).
+- **/ (Items)** — filter tabs: Unidentified / In-process / Drafts / Listed /
+  Sold. "Unidentified" pulls `PhotoGroup where itemId IS NULL`; the rest pull
+  `Item` rows filtered by `status`.
 
-1. Confirm the MCP server is attached: `swiftlist` should appear in the tool
-   list with tools `list_pending_batches`, `get_batch`, `commit_batch`.
-2. `swiftlist.list_pending_batches({})` → expect at least one batch.
-3. For each batch:
-   - `swiftlist.get_batch({ batchId })` — returns `photos[]` with base64
-     JPEGs and a `continuation` hint (may be null).
-   - Look at each image. Produce an `AnalysisResult` that matches the
-     `AnalysisResultSchema` in
-     `/home/robug/swiftlist/packages/server/src/services/ai.service.ts`
-     (zod schema; groups[].photoIndices, item: {title,description,brand,model,
-     category,condition,features,keywords,itemSpecifics,upc,isbn,mpn},
-     confidence, isContinuationOfExistingItem, existingItemMatchConfidence).
-   - `swiftlist.commit_batch({ batchId, result })`. Server replays the
-     normal ingest transaction (Item create / continuation attach / photo
-     assignment / IngestEvents + hostItemImages + completeness).
-4. The extension popup's "N awaiting external AI" badge should tick to 0.
+Key code touched:
 
-**Grouping guidance (mirror the ingest prompt):** if consecutive filenames
-and tight timestamps suggest a single burst, keep them as ONE group unless
-the visual evidence is unambiguous. Read visible text aggressively — brand,
-model, MPN, UPC, serial/patent numbers go into their own fields; don't
-guess values not visible on the item itself.
+- `prisma/schema.prisma` — `ItemStatus` enum gained `IN_PROCESS`;
+  `PhotoGroup.label` added. Migration
+  `20260423172301_manual_grouping_scaffolding` is applied.
+- `packages/server/src/services/ingest.service.ts` — `flushBatch` stops
+  after Photo persistence. `processCluster` + `recomputeCompleteness` were
+  deleted (to be reborn as manual-trigger endpoints — see next steps).
+- `packages/server/src/routes/groups.routes.ts`, `photos.routes.ts` — new.
+  Mounted at `/api/v1/groups` and `/api/v1/photos`.
+- `packages/client/src/routes/GroupDetailPage.tsx` — new. Route
+  `/groups/:id` in `main.tsx`.
+- `packages/client/src/routes/{ItemsPage,PoolPage}.tsx` — rewritten for
+  filter tabs / multi-select.
 
-If the ingest hint is set (Setting row `ingest_hint` — check via
-`/api/v1/settings/ingest-hint`), include it as catalog context.
+## What's next (sequence the user approved)
 
-## Running dev processes (at handoff time)
+1. **Run AI identification** endpoint + UI wiring on the folder detail page.
+   Accepts a PhotoGroup id + optional `context` text; LLM-analyzes the
+   photos; creates an `Item` with `status = IN_PROCESS` and attaches the
+   group. Re-runs replace the prior analysis but are gated by the approval
+   panel (#3 below). For `external-mcp` provider, still queues an
+   `ExternalAnalysisBatch` — the drain path (`packages/mcp-server`) is
+   untouched and still works.
+2. **eBay image search as identification** in folder detail. User clicks
+   image search on one photo, picks a result, whole group promotes to
+   `IN_PROCESS` under the selected eBay item's name. Backend is a
+   generalized variant of the existing `/items/:id/sold-comp-link` path.
+3. **Per-field import approval panel** — new `PendingCompLink` staging
+   shape (or `SoldCompLink.approvedFields Json`), with a checkbox-per-field
+   UI. Checkboxes default ON for title/category/specifics/description/
+   condition and OFF for images. If the Item's condition is New, surface a
+   hint next to the images checkbox but still require opt-in. This gates
+   both the AI re-run path and the eBay attach path.
+4. **Extension: Associate button on active eBay listing and /sch/ pages**
+   (sibling of `packages/extension/content-sold.js`) so sold-but-qty-remaining
+   items can be attached without hunting for the sold-only view.
+5. **eBay image search as ingest prior** — before any LLM call, search the
+   primary photo on eBay Browse, inject top 3–5 hits' title/category/
+   itemSpecifics into the prompt as hints. Browse API is rate-limited, so
+   start with primary-photo-only.
+
+## Running dev processes
 
 - **Server**: `tsx watch packages/server/src/server.ts` on :3004
 - **Client**: `vite` on :5173
@@ -47,16 +69,6 @@ If the ingest hint is set (Setting row `ingest_hint` — check via
   `/home/robug/swiftlist/inbox`, posts to `:3004`
 - Login: `john@robug.com` / `ListFast` (seeded)
 - Extension API key: in `packages/extension/defaults.js` (git-ignored)
-
-## Recent landings (pushed to github.com/r0bug/SwiftList)
-
-- `f366234` per-photo eBay image search (Browse API) + OCR priority in
-  ingest prompt
-- `42dd414` static-mount path fix (resolveConfigPath anchors to workspace
-  root) + `/api/v1/items/photo/:id/thumb`
-- `ca716ae` watcher env walkup + lazy api.ts capture
-- `ca84008` pre-commit hook auto-bumps extension manifest patch
-- `df1bf8a` external-MCP vision provider + `@swiftlist/mcp-server` workspace
 
 ## Gotchas
 
@@ -71,6 +83,10 @@ If the ingest hint is set (Setting row `ingest_hint` — check via
 - `Photo.thumbnailPath` / `optimizedPath` store ABSOLUTE filesystem paths,
   not URL-relative paths. Never concatenate them onto `/uploads/`. Use the
   `/api/v1/items/photo/:id/thumb` endpoint instead.
-- After draining the external queue, ask the user whether to flip vision
-  provider back to `anthropic` for automatic ingest. Right now it stays
-  on `external-mcp`, so every future ingest will queue again.
+- `packages/server/src/services/ingest.service.ts` still imports
+  `Prisma` from the generated client solely for `InputJsonValue` typing —
+  do not delete that import when cleaning up.
+- When re-implementing AI ident as a manual trigger, refactor against the
+  pre-existing PhotoGroup rather than freshly clustering: the group is the
+  container the user already confirmed. The old `processCluster` did both
+  jobs; don't resurrect it — split clustering from analysis.

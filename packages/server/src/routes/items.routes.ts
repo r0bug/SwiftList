@@ -9,7 +9,7 @@ import type { Prisma } from '../generated/prisma/index.js';
 
 const router = Router();
 
-const ItemStatuses = ['DRAFT', 'READY', 'LISTED', 'SOLD', 'ARCHIVED'] as const;
+const ItemStatuses = ['IN_PROCESS', 'DRAFT', 'READY', 'LISTED', 'SOLD', 'ARCHIVED'] as const;
 const ItemStages = ['INGESTED', 'GROUPED', 'IDENTIFIED', 'MATCHED', 'DRAFT_STARTED', 'READY'] as const;
 type ItemStatus = (typeof ItemStatuses)[number];
 type ItemStage = (typeof ItemStages)[number];
