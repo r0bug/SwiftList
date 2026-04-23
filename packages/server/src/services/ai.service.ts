@@ -14,6 +14,18 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { logger } from '../util/logger.js';
+import { prisma } from '../db/prisma.js';
+
+const INGEST_HINT_KEY = 'ingest_hint';
+
+async function loadIngestHint(): Promise<string> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: INGEST_HINT_KEY } });
+    return (row?.value as { text?: string } | null)?.text?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
 
 // Claude Sonnet 4.6 pricing per 1M tokens (USD). Check Anthropic pricing page
 // before considering these authoritative; numbers match Sonnet-4-class tiers.
@@ -108,6 +120,14 @@ class AIService {
       | { type: 'text'; text: string }
       | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
     > = [];
+
+    // User-supplied context hint (from /settings/ingest-hint) — biases
+    // Claude toward the seller's known inventory context (e.g. "these are
+    // antique hardware; prefer treating an assembled fixture as one item").
+    const hint = await loadIngestHint();
+    if (hint) {
+      userBlocks.push({ type: 'text', text: `CATALOG CONTEXT from seller — apply to all groupings/titles:\n${hint}` });
+    }
 
     // Continuation hint goes first so Claude's attention is anchored.
     if (opts.continuation) {

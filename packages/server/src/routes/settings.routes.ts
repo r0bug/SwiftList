@@ -96,4 +96,31 @@ router.post('/password', jwtAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Ingest hint (global AI prompt augmentation) ────────────────────────
+
+const INGEST_HINT_KEY = 'ingest_hint';
+
+router.get('/ingest-hint', jwtAuth, async (_req, res) => {
+  const row = await prisma.setting.findUnique({ where: { key: INGEST_HINT_KEY } });
+  const value = (row?.value as { text?: string } | null)?.text ?? '';
+  res.json({ hint: value });
+});
+
+const IngestHintSchema = z.object({ hint: z.string().max(4000) });
+
+router.put('/ingest-hint', jwtAuth, async (req, res) => {
+  const parsed = IngestHintSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid body', issues: parsed.error.issues });
+    return;
+  }
+  const trimmed = parsed.data.hint.trim();
+  await prisma.setting.upsert({
+    where: { key: INGEST_HINT_KEY },
+    create: { key: INGEST_HINT_KEY, value: { text: trimmed } },
+    update: { value: { text: trimmed } },
+  });
+  res.json({ hint: trimmed });
+});
+
 export default router;

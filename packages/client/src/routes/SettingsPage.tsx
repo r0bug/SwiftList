@@ -28,8 +28,65 @@ export function SettingsPage() {
     <div className="flex flex-col gap-8">
       <h2 className="text-2xl">Settings</h2>
       <AccountSection />
+      <IngestHintSection />
       <ApiKeysSection />
     </div>
+  );
+}
+
+function IngestHintSection() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['ingest-hint'],
+    queryFn: () => api.getIngestHint(),
+  });
+  const [value, setValue] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+  const save = useMutation({
+    mutationFn: () => api.setIngestHint(value ?? ''),
+    onSuccess: (res) => {
+      setValue(res.hint);
+      setOk(true);
+      qc.invalidateQueries({ queryKey: ['ingest-hint'] });
+    },
+  });
+  const current = value ?? data?.hint ?? '';
+  return (
+    <section className="border border-neutral-800 rounded p-4">
+      <h3 className="font-medium mb-1">Ingest hint</h3>
+      <p className="text-xs text-neutral-500 mb-3">
+        Extra context prepended to every image-recognition prompt. Use it to steer
+        Claude's grouping and titling — e.g. <em>"Antique hardware and plumbing
+        parts. Treat an assembled fixture as one item, even if photographed from
+        many angles."</em>
+      </p>
+      <textarea
+        rows={4}
+        value={current}
+        disabled={isLoading}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setOk(false);
+        }}
+        className="w-full bg-neutral-900 border border-neutral-800 rounded px-2 py-1.5 text-sm font-mono"
+        placeholder="(empty — no extra context)"
+      />
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => save.mutate()}
+          disabled={save.isPending || value === null}
+          className="px-3 py-1.5 rounded border border-neutral-700 hover:border-neutral-500 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {save.isPending ? 'Saving…' : 'Save hint'}
+        </button>
+        {save.error ? (
+          <span className="text-xs text-red-400">{(save.error as Error).message}</span>
+        ) : ok ? (
+          <span className="text-xs text-emerald-400">Saved.</span>
+        ) : null}
+      </div>
+    </section>
   );
 }
 

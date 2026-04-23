@@ -11,6 +11,10 @@ coverage/
 *.tsbuildinfo
 uploads/
 public-images/swiftlist/
+packages/server/uploads/
+packages/server/public-images/
+inbox/
+packages/*/inbox/
 prisma/migrations/migration_lock.toml.bak
 packages/server/src/generated/
 .swiftlist-watcher.pid

@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../api/client.js';
+import { useAuth } from '../hooks/useAuth.js';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -9,7 +10,13 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { me, refresh } = useAuth();
   const from = (location.state as { from?: string })?.from ?? '/';
+
+  // Already signed in? Bounce to the target page.
+  useEffect(() => {
+    if (me) navigate(from, { replace: true });
+  }, [me, from, navigate]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -17,6 +24,8 @@ export function LoginPage() {
     setLoading(true);
     try {
       await api.login(email, password);
+      // Pull /auth/me so AuthProvider knows we're in before RequireAuth runs.
+      await refresh();
       navigate(from, { replace: true });
     } catch (err) {
       setError(err instanceof Error && err.message !== 'unauthenticated' ? err.message : 'Invalid email or password');

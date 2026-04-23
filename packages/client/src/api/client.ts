@@ -68,6 +68,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  mergeItemInto: (sourceId: string, targetId: string) =>
+    http<{ ok: true; mergedInto: string }>(`/items/${sourceId}/merge-into`, {
+      method: 'POST',
+      body: JSON.stringify({ targetId }),
+    }),
+  movePhotos: (sourceId: string, photoIds: string[], targetItemId: string) =>
+    http<{ ok: true; moved: number }>(`/items/${sourceId}/photos/move`, {
+      method: 'POST',
+      body: JSON.stringify({ photoIds, targetItemId }),
+    }),
+  getIngestHint: () => http<{ hint: string }>('/settings/ingest-hint'),
+  setIngestHint: (hint: string) =>
+    http<{ hint: string }>('/settings/ingest-hint', {
+      method: 'PUT',
+      body: JSON.stringify({ hint }),
+    }),
 };
 
 export interface ApiKeyRow {

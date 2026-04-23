@@ -205,6 +205,96 @@ router.post('/:id/sold-comp-link', apiKeyAuth, async (req, res) => {
   res.json({ ok: true, link });
 });
 
+// ── Merge + photo move ────────────────────────────────────────────────
+
+router.post('/:id/merge-into', jwtAuth, async (req, res) => {
+  const sourceId = pstr(req.params.id);
+  const targetId = (req.body as { targetId?: string } | undefined)?.targetId;
+  if (!targetId || typeof targetId !== 'string') {
+    res.status(400).json({ error: 'targetId required' });
+    return;
+  }
+  if (targetId === sourceId) {
+    res.status(400).json({ error: 'Cannot merge item into itself' });
+    return;
+  }
+  const [source, target] = await Promise.all([
+    prisma.item.findUnique({ where: { id: sourceId } }),
+    prisma.item.findUnique({ where: { id: targetId } }),
+  ]);
+  if (!source || !target) {
+    res.status(404).json({ error: 'Item not found' });
+    return;
+  }
+  const merged = await prisma.$transaction(async (tx) => {
+    await tx.photo.updateMany({ where: { itemId: sourceId }, data: { itemId: targetId } });
+    await tx.photoGroup.updateMany({ where: { itemId: sourceId }, data: { itemId: targetId } });
+    await tx.soldCompLink.updateMany({ where: { itemId: sourceId }, data: { itemId: targetId } });
+    await tx.ebayDraft.updateMany({ where: { itemId: sourceId }, data: { itemId: targetId } });
+    await tx.ingestEvent.updateMany({ where: { itemId: sourceId }, data: { itemId: targetId } });
+    await tx.item.update({
+      where: { id: targetId },
+      data: { aiCost: { increment: Number(source.aiCost) } },
+    });
+    await tx.item.delete({ where: { id: sourceId } });
+    const updated = await tx.item.findUnique({
+      where: { id: targetId },
+      include: { photos: { select: { id: true } } },
+    });
+    return updated!;
+  });
+
+  const report = computeCompleteness({ ...merged, hasPhotos: merged.photos.length > 0 });
+  await prisma.item.update({
+    where: { id: targetId },
+    data: { completeness: report as unknown as Prisma.InputJsonValue },
+  });
+  res.json({ ok: true, mergedInto: targetId });
+});
+
+const MovePhotosSchema = z.object({
+  photoIds: z.array(z.string().min(1)).min(1),
+  targetItemId: z.string().min(1),
+});
+
+router.post('/:id/photos/move', jwtAuth, async (req, res) => {
+  const sourceId = pstr(req.params.id);
+  const parsed = MovePhotosSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid body', issues: parsed.error.issues });
+    return;
+  }
+  const { photoIds, targetItemId } = parsed.data;
+  if (targetItemId === sourceId) {
+    res.status(400).json({ error: 'Source and target are the same item' });
+    return;
+  }
+  const target = await prisma.item.findUnique({ where: { id: targetItemId } });
+  if (!target) {
+    res.status(404).json({ error: 'Target item not found' });
+    return;
+  }
+  const moved = await prisma.photo.updateMany({
+    where: { id: { in: photoIds }, itemId: sourceId },
+    data: { itemId: targetItemId, isPrimary: false },
+  });
+
+  // Recompute completeness for both items (source may be photoless now).
+  for (const id of [sourceId, targetItemId]) {
+    const item = await prisma.item.findUnique({
+      where: { id },
+      include: { photos: { select: { id: true } } },
+    });
+    if (!item) continue;
+    const report = computeCompleteness({ ...item, hasPhotos: item.photos.length > 0 });
+    await prisma.item.update({
+      where: { id },
+      data: { completeness: report as unknown as Prisma.InputJsonValue },
+    });
+  }
+  res.json({ ok: true, moved: moved.count });
+});
+
 // ── Drafts for an item ────────────────────────────────────────────────
 
 router.get('/:id/drafts', apiKeyOrJwt, async (req, res) => {
