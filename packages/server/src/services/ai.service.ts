@@ -100,7 +100,15 @@ Pay HIGH attention to filename + capture-timestamp metadata embedded in each ima
 
 When given an EXISTING ITEM hint, your primary job is to answer whether the new photos are another angle of that same physical object. Set isContinuationOfExistingItem=true with confidence ≥ 0.75 only when you are confident the photos depict the same single object.
 
-Do not hallucinate UPC/ISBN/MPN — leave fields null if not visible. Item specifics should use eBay-standard names ("Brand", "Model", "Color", "Material", "Type", etc.).`;
+READ ALL VISIBLE TEXT. Carefully inspect every photo for text on the item itself — labels, nameplates, stickers, stamped/embossed/engraved marks, printed brand names, tags, packaging. Extract the highest-value identifiers first:
+  • BRAND (manufacturer's name) → Brand
+  • MODEL or model number → Model
+  • MANUFACTURER PART NUMBER (MPN, part #, catalog #) → mpn and itemSpecifics.MPN
+  • UPC / EAN / ISBN → upc / isbn
+  • SERIAL NUMBER, PATENT NUMBER, COUNTRY OF ORIGIN, MATERIAL, SIZE, CAPACITY
+If you see ANY printed or stamped identifier, put the literal string in the matching field — even fragments ("PAT. PEND.", "MADE IN JAPAN", "Cat. No. 1234") are useful. Do NOT guess values for fields where no text is visible; leave them null.
+
+Item specifics should use eBay-standard names ("Brand", "Model", "Color", "Material", "Type", "MPN", "Country/Region of Manufacture", etc.).`;
 
 class AIService {
   private client: Anthropic | null = null;

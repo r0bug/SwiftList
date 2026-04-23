@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type ItemRow } from '../api/client.js';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, type EbayHit, type ItemRow } from '../api/client.js';
 
 function photoSrc(p: { id: string; cdnUrl?: string | null; publicUrl?: string | null }): string {
   if ((p as { cdnUrl?: string | null }).cdnUrl) return (p as { cdnUrl?: string | null }).cdnUrl as string;
@@ -22,6 +22,8 @@ export function ItemDetailPage() {
 
   const [selectedPhotos, setSelectedPhotos] = useState<Set<string>>(new Set());
   const [picker, setPicker] = useState<null | { mode: 'merge' | 'move' }>(null);
+  const [imageSearchFor, setImageSearchFor] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number; photoId: string }>(null);
 
   if (isLoading) return <div className="text-neutral-400">Loading…</div>;
   if (error) return <div className="text-red-400">Error: {(error as Error).message}</div>;
@@ -80,22 +82,31 @@ export function ItemDetailPage() {
           {data.photos.map((p) => {
             const selected = selectedPhotos.has(p.id);
             return (
-              <button
+              <div
                 key={p.id}
-                type="button"
-                onClick={() => toggle(p.id)}
-                className={`relative aspect-square bg-neutral-900 rounded overflow-hidden border-2 ${
+                className={`group relative aspect-square bg-neutral-900 rounded overflow-hidden border-2 ${
                   selected ? 'border-sky-400' : 'border-neutral-800 hover:border-neutral-600'
                 }`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setCtxMenu({ x: e.clientX, y: e.clientY, photoId: p.id });
+                }}
               >
-                <img
-                  src={photoSrc(p)}
-                  alt=""
-                  loading="lazy"
-                  className="w-full h-full object-cover"
-                />
+                <button
+                  type="button"
+                  onClick={() => toggle(p.id)}
+                  className="absolute inset-0 w-full h-full"
+                  aria-label="Toggle photo selection"
+                >
+                  <img
+                    src={photoSrc(p)}
+                    alt=""
+                    loading="lazy"
+                    className="w-full h-full object-cover"
+                  />
+                </button>
                 <span
-                  className={`absolute top-1 left-1 w-5 h-5 rounded-full border text-[10px] flex items-center justify-center ${
+                  className={`pointer-events-none absolute top-1 left-1 w-5 h-5 rounded-full border text-[10px] flex items-center justify-center ${
                     selected
                       ? 'bg-sky-400 border-sky-400 text-neutral-950'
                       : 'bg-neutral-950/70 border-neutral-600 text-transparent'
@@ -103,7 +114,18 @@ export function ItemDetailPage() {
                 >
                   ✓
                 </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setImageSearchFor(p.id);
+                  }}
+                  className="absolute bottom-1 right-1 text-[10px] bg-neutral-950/80 border border-neutral-700 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition hover:border-sky-400 hover:text-sky-300"
+                  title="Find on eBay by this image"
+                >
+                  Find on eBay
+                </button>
+              </div>
             );
           })}
         </div>
@@ -142,6 +164,22 @@ export function ItemDetailPage() {
         )}
       </section>
 
+      {ctxMenu && (
+        <PhotoContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+          onPick={() => {
+            setImageSearchFor(ctxMenu.photoId);
+            setCtxMenu(null);
+          }}
+        />
+      )}
+
+      {imageSearchFor && (
+        <ImageSearchModal photoId={imageSearchFor} onClose={() => setImageSearchFor(null)} />
+      )}
+
       {picker && (
         <ItemPicker
           excludeId={data.id}
@@ -167,6 +205,140 @@ export function ItemDetailPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function PhotoContextMenu({
+  x,
+  y,
+  onClose,
+  onPick,
+}: {
+  x: number;
+  y: number;
+  onClose: () => void;
+  onPick: () => void;
+}) {
+  useEffect(() => {
+    const close = () => onClose();
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', close);
+    };
+  }, [onClose]);
+  return (
+    <div
+      className="fixed z-50 bg-neutral-900 border border-neutral-700 rounded shadow-lg text-sm min-w-[180px]"
+      style={{ left: x, top: y }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        onClick={onPick}
+        className="block w-full text-left px-3 py-2 hover:bg-neutral-800"
+      >
+        Find on eBay by this image
+      </button>
+    </div>
+  );
+}
+
+function ImageSearchModal({ photoId, onClose }: { photoId: string; onClose: () => void }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['image-search', photoId],
+    queryFn: () => api.photoImageSearch(photoId, 20),
+    staleTime: 60_000,
+  });
+
+  function soldSearchUrl(title: string): string {
+    const q = encodeURIComponent(title);
+    return `https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1`;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-neutral-950/80 flex items-start justify-center p-4 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl bg-neutral-900 border border-neutral-800 rounded-lg p-4 space-y-3 my-8"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-baseline justify-between">
+          <div>
+            <h4 className="font-medium">eBay matches (active listings)</h4>
+            <div className="text-xs text-neutral-500">
+              Image search returns current listings, not sold. Use "sold by title" to pivot to completed comps.
+            </div>
+          </div>
+          <button onClick={onClose} className="text-xs text-neutral-400 hover:text-neutral-200">
+            Close
+          </button>
+        </div>
+        {isLoading && <div className="text-neutral-500 text-sm">Searching eBay…</div>}
+        {error && <div className="text-red-400 text-sm">Error: {(error as Error).message}</div>}
+        {data && data.itemSummaries.length === 0 && (
+          <div className="text-neutral-500 text-sm">No matches.</div>
+        )}
+        {data && data.itemSummaries.length > 0 && (
+          <ul className="divide-y divide-neutral-800 border border-neutral-800 rounded">
+            {data.itemSummaries.map((hit: EbayHit) => {
+              const thumb = hit.thumbnailImages?.[0]?.imageUrl ?? hit.image?.imageUrl;
+              return (
+                <li key={hit.itemId} className="p-3 flex gap-3 items-start">
+                  {thumb && (
+                    <img
+                      src={thumb}
+                      alt=""
+                      className="w-20 h-20 object-cover rounded border border-neutral-800"
+                      loading="lazy"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate" title={hit.title}>
+                      {hit.title}
+                    </div>
+                    <div className="text-xs text-neutral-500 mt-0.5">
+                      {hit.price ? `${hit.price.currency} $${hit.price.value}` : '—'}
+                      {hit.condition && <> · {hit.condition}</>}
+                      {hit.seller?.username && (
+                        <> · {hit.seller.username}
+                          {typeof hit.seller.feedbackScore === 'number' &&
+                            ` (${hit.seller.feedbackScore})`}
+                        </>
+                      )}
+                    </div>
+                    <div className="flex gap-3 mt-2 text-xs">
+                      {hit.itemWebUrl && (
+                        <a
+                          href={hit.itemWebUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sky-400 hover:text-sky-300 hover:underline"
+                        >
+                          Open on eBay ↗
+                        </a>
+                      )}
+                      <a
+                        href={soldSearchUrl(hit.title)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-neutral-300 hover:text-neutral-100 hover:underline"
+                      >
+                        Search sold by this title ↗
+                      </a>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

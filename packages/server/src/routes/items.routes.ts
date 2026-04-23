@@ -205,6 +205,53 @@ router.post('/:id/sold-comp-link', apiKeyAuth, async (req, res) => {
   res.json({ ok: true, link });
 });
 
+// ── Photo → eBay image search ─────────────────────────────────────────
+// Sends the photo's optimized/original bytes (base64, sharp-resized) to
+// eBay Browse API's /item_summary/search_by_image and returns the raw
+// item summaries. These are ACTIVE listings, not sold ones — use them to
+// identify the item, then pivot to the existing sold-comps flow.
+
+import sharp from 'sharp';
+import { searchByImage, ebayBrowseConfigured } from '../services/ebayBrowse.service.js';
+
+router.post('/photo/:photoId/image-search', apiKeyOrJwt, async (req, res) => {
+  if (!ebayBrowseConfigured()) {
+    res.status(503).json({ error: 'EBAY_BROWSE_CLIENT_ID / _SECRET not configured in server env' });
+    return;
+  }
+  const photoId = pstr(req.params.photoId);
+  const photo = await prisma.photo.findUnique({
+    where: { id: photoId },
+    select: { optimizedPath: true, originalPath: true },
+  });
+  if (!photo) {
+    res.status(404).json({ error: 'Photo not found' });
+    return;
+  }
+  const source = photo.optimizedPath ?? photo.originalPath;
+  if (!source) {
+    res.status(422).json({ error: 'Photo has no stored file path' });
+    return;
+  }
+  try {
+    // eBay rejects extremely large payloads; resize to 1024 longedge + JPEG.
+    const buf = await sharp(source)
+      .rotate()
+      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    const base64 = buf.toString('base64');
+    const limit = Math.min(Math.max(Number((req.body as { limit?: number } | undefined)?.limit) || 20, 1), 50);
+    const data = await searchByImage(base64, { limit });
+    res.json({
+      itemSummaries: data.itemSummaries ?? [],
+      total: data.total ?? data.itemSummaries?.length ?? 0,
+    });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
+
 // ── Photo thumbnail / file stream ─────────────────────────────────────
 // Used by the web UI as a fallback when a Photo has no publicUrl / cdnUrl
 // (or while that hosting step is still pending). Reads the file directly

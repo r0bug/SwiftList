@@ -84,7 +84,23 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ hint }),
     }),
+  photoImageSearch: (photoId: string, limit = 20) =>
+    http<{ itemSummaries: EbayHit[]; total: number }>(
+      `/items/photo/${photoId}/image-search`,
+      { method: 'POST', body: JSON.stringify({ limit }) },
+    ),
 };
+
+export interface EbayHit {
+  itemId: string;
+  title: string;
+  price?: { value: string; currency: string };
+  condition?: string;
+  itemWebUrl?: string;
+  image?: { imageUrl?: string };
+  thumbnailImages?: Array<{ imageUrl: string }>;
+  seller?: { username?: string; feedbackScore?: number };
+}
 
 export interface ApiKeyRow {
   id: string;
