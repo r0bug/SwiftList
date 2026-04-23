@@ -1,0 +1,24 @@
+# Optional: spin up Postgres for swiftlist if you don't have it locally.
+#   docker compose up -d postgres
+# Then run ./install.sh — it will detect the running database.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: swiftlist-postgres
+    environment:
+      POSTGRES_USER: swiftlist
+      POSTGRES_PASSWORD: swiftlist
+      POSTGRES_DB: swiftlist
+    ports:
+      - "5432:5432"
+    volumes:
+      - swiftlist-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swiftlist"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  swiftlist-pg-data:

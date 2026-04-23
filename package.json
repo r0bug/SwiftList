@@ -1,0 +1,34 @@
+{
+  "name": "swiftlist",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first eBay listing assistant: folder-watch + vision LLM + Chrome extension that drives eBay's own draft/listing UI.",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/watcher",
+    "packages/client"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:server": "npm run dev --workspace @swiftlist/server",
+    "dev:watcher": "npm run dev --workspace @swiftlist/watcher",
+    "dev:client": "npm run dev --workspace @swiftlist/client",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "pack:extension": "cd packages/extension && zip -r ../../dist/swiftlist-extension.zip . -x '*.DS_Store'"
+  },
+  "devDependencies": {
+    "prisma": "^6.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

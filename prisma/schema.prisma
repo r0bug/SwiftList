@@ -1,0 +1,354 @@
+// swiftlist — local-first eBay listing assistant
+// Tables live in the `swiftlist` Postgres schema, alongside `comptool`'s schema
+// in the same database. multiSchema preview is required for this layout.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../packages/server/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["swiftlist"]
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Items + photos
+// ────────────────────────────────────────────────────────────────────
+
+model Item {
+  id                String   @id @default(cuid())
+  title             String?
+  description       String?
+  brand             String?
+  model             String?
+  category          String?
+  ebayCategoryId    String?
+  condition         String?
+  conditionId       Int?
+  features          String[]
+  keywords          String[]
+  itemSpecifics     Json?
+  upc               String?
+  isbn              String?
+  mpn               String?
+  epid              String?
+  startingPrice     Decimal? @db.Decimal(10, 2)
+  buyNowPrice       Decimal? @db.Decimal(10, 2)
+  shippingPrice     Decimal? @db.Decimal(10, 2)
+  weightOz          Float?
+  packageDimensions Json?
+  listingFormat     String?
+  listingDuration   String?
+  returnPolicy      Json?
+  postalCode        String?
+  ebayItemId        String?
+  ebayListingUrl    String?
+  status            ItemStatus @default(DRAFT)
+  stage             ItemStage  @default(INGESTED)
+  aiAnalysis        Json?
+  aiCost            Decimal    @default(0) @db.Decimal(10, 4)
+  completeness      Json?
+  sourceFolder      String?
+  fingerprint       String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  photos        Photo[]
+  groups        PhotoGroup[]
+  soldComps     SoldCompLink[]
+  drafts        EbayDraft[]
+  ingestEvents  IngestEvent[]
+
+  @@index([status])
+  @@index([stage])
+  @@index([fingerprint])
+  @@index([ebayItemId])
+  @@schema("swiftlist")
+}
+
+model Photo {
+  id              String      @id @default(cuid())
+  itemId          String?
+  photoGroupId    String?
+  originalPath    String
+  thumbnailPath   String?
+  optimizedPath   String?
+  publicUrl       String?
+  cdnUrl          String?
+  isPrimary       Boolean     @default(false)
+  order           Int         @default(0)
+  sha256          String      @unique
+  perceptualHash  String?
+  width           Int?
+  height          Int?
+  bytes           Int?
+  mime            String?
+  capturedAt      DateTime?
+  exif            Json?
+  analysis        Json?
+  createdAt       DateTime    @default(now())
+
+  item       Item?       @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  photoGroup PhotoGroup? @relation(fields: [photoGroupId], references: [id], onDelete: SetNull)
+
+  @@index([itemId])
+  @@index([photoGroupId])
+  @@index([perceptualHash])
+  @@index([capturedAt])
+  @@schema("swiftlist")
+}
+
+model PhotoGroup {
+  id                   String           @id @default(cuid())
+  itemId               String?
+  sourceFolder         String
+  firstFilenameNumeric Int?
+  lastFilenameNumeric  Int?
+  firstCapturedAt      DateTime?
+  lastCapturedAt       DateTime?
+  status               PhotoGroupStatus @default(PENDING)
+  llmDecision          Json?
+  createdAt            DateTime         @default(now())
+
+  item   Item?   @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  photos Photo[]
+
+  @@index([sourceFolder, firstCapturedAt])
+  @@index([status])
+  @@schema("swiftlist")
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Ingestion audit + watch config
+// ────────────────────────────────────────────────────────────────────
+
+model IngestEvent {
+  id         String          @id @default(cuid())
+  path       String
+  sha256     String
+  decision   IngestDecision
+  itemId     String?
+  groupId    String?
+  llmCostUsd Decimal?        @db.Decimal(10, 4)
+  error      String?
+  createdAt  DateTime        @default(now())
+
+  item Item? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([sha256])
+  @@index([createdAt])
+  @@index([decision])
+  @@schema("swiftlist")
+}
+
+model WatchFolder {
+  id            String   @id @default(cuid())
+  path          String   @unique
+  enabled       Boolean  @default(true)
+  includeGlobs  String[] @default(["**/*.{jpg,jpeg,png,heic,heif,webp}"])
+  excludeGlobs  String[] @default([])
+  lastScanAt    DateTime?
+  recursive     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@schema("swiftlist")
+}
+
+model Device {
+  id              String          @id @default(cuid())
+  vendorId        String
+  productId       String
+  label           String?
+  lastMountPath   String?
+  lastImportedAt  DateTime?
+  autoImport      Boolean         @default(false)
+  importSubdir    String?
+  importMethod    DeviceImportMethod @default(MASS_STORAGE)
+  createdAt       DateTime        @default(now())
+
+  @@unique([vendorId, productId])
+  @@schema("swiftlist")
+}
+
+// ────────────────────────────────────────────────────────────────────
+// eBay integration: sold comps + drafts
+// ────────────────────────────────────────────────────────────────────
+
+model SoldCompLink {
+  id             String   @id @default(cuid())
+  itemId         String
+  ebayItemId     String
+  soldPrice      Decimal? @db.Decimal(10, 2)
+  soldDate       DateTime?
+  currency       String   @default("USD")
+  categoryId     String?
+  categoryPath   String?
+  condition      String?
+  title          String?
+  description    String?  @db.Text
+  itemSpecifics  Json?
+  imageUrls      String[]
+  sellerName     String?
+  scrapedAt      DateTime @default(now())
+  isPrimary      Boolean  @default(false)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, ebayItemId])
+  @@index([itemId])
+  @@index([ebayItemId])
+  @@schema("swiftlist")
+}
+
+// Tracks an eBay draft listing the extension has linked to a swiftlist Item.
+// Enables "resume where left off" — see EbayDraft.lastFilledFields and
+// currentValues, used by the draft.service.ts delta-fill logic.
+model EbayDraft {
+  id                String           @id @default(cuid())
+  itemId            String
+  ebayDraftId       String?          @unique
+  ebayDraftUrl      String
+  accountHint       String?
+  lastSeenAt        DateTime         @default(now())
+  lastFilledAt      DateTime?
+  lastFilledFields  Json?
+  currentValues     Json?
+  status            EbayDraftStatus  @default(OPEN)
+  notes             String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@index([status])
+  @@schema("swiftlist")
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Auth: extension API keys + machine tracking (mirror comptool patterns)
+// ────────────────────────────────────────────────────────────────────
+
+model Client {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  createdAt DateTime @default(now())
+
+  apiKeys ApiKey[]
+
+  @@schema("swiftlist")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  clientId   String
+  keyHash    String    @unique
+  name       String?
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  client   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  machines Machine[]
+
+  @@index([clientId])
+  @@schema("swiftlist")
+}
+
+model Machine {
+  id          String   @id @default(cuid())
+  apiKeyId    String
+  machineId   String   @unique
+  userAgent   String?
+  lastSeenAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId])
+  @@schema("swiftlist")
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@schema("swiftlist")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  isAdmin      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@schema("swiftlist")
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Enums
+// ────────────────────────────────────────────────────────────────────
+
+enum ItemStatus {
+  DRAFT
+  READY
+  LISTED
+  SOLD
+  ARCHIVED
+
+  @@schema("swiftlist")
+}
+
+enum ItemStage {
+  INGESTED
+  GROUPED
+  IDENTIFIED
+  MATCHED
+  DRAFT_STARTED
+  READY
+
+  @@schema("swiftlist")
+}
+
+enum PhotoGroupStatus {
+  PENDING
+  ANALYZING
+  ASSIGNED
+  REJECTED
+
+  @@schema("swiftlist")
+}
+
+enum IngestDecision {
+  NEW_ITEM
+  ADDED_TO_ITEM
+  DUPLICATE_SKIPPED
+  GROUPED_PENDING
+  ERROR
+
+  @@schema("swiftlist")
+}
+
+enum DeviceImportMethod {
+  MASS_STORAGE
+  GVFS
+  GPHOTO2
+
+  @@schema("swiftlist")
+}
+
+enum EbayDraftStatus {
+  OPEN
+  SUBMITTED
+  ABANDONED
+  UNKNOWN
+
+  @@schema("swiftlist")
+}
