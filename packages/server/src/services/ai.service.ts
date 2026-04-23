@@ -87,6 +87,14 @@ export interface ContinuationHint {
 export interface AnalyzeOptions {
   photos: PhotoForAnalysis[];
   continuation?: ContinuationHint;
+  // Free-text context supplied for this specific identification run —
+  // from the /groups/:id/identify-ai endpoint. Appended to the Claude
+  // prompt as a separate block after the global ingest_hint.
+  context?: string;
+  // Optional eBay Browse image-search priors (top hits from
+  // searchByImage on the primary photo) injected as identification
+  // hints. Let Claude use, not copy.
+  visualMatches?: Array<{ title: string; category?: string; condition?: string; itemSpecifics?: Record<string, string> }>;
 }
 
 export interface AnalyzeResponse {
@@ -135,6 +143,34 @@ class AIService {
     const hint = await loadIngestHint();
     if (hint) {
       userBlocks.push({ type: 'text', text: `CATALOG CONTEXT from seller — apply to all groupings/titles:\n${hint}` });
+    }
+
+    // Per-run context from the folder-detail UI. Takes precedence over the
+    // global ingest hint when both are set; both are included for coverage.
+    if (opts.context && opts.context.trim()) {
+      userBlocks.push({
+        type: 'text',
+        text: `PER-RUN CONTEXT from user — applies to this identification only:\n${opts.context.trim()}`,
+      });
+    }
+
+    // Visual priors from eBay Browse searchByImage. Use as hints — do not
+    // copy values blindly. These identify likely brand/model/category for
+    // items whose printed text is absent or illegible.
+    if (opts.visualMatches && opts.visualMatches.length > 0) {
+      const lines = opts.visualMatches.slice(0, 5).map((m, i) => {
+        const parts = [`#${i + 1}: "${m.title}"`];
+        if (m.category) parts.push(`category: ${m.category}`);
+        if (m.condition) parts.push(`condition: ${m.condition}`);
+        if (m.itemSpecifics && Object.keys(m.itemSpecifics).length > 0) {
+          parts.push(`specifics: ${JSON.stringify(m.itemSpecifics)}`);
+        }
+        return parts.join(' · ');
+      });
+      userBlocks.push({
+        type: 'text',
+        text: `VISUAL MATCHES from eBay image search — use as hints to identify the item; verify against the actual photos; do not copy values not supported by the images:\n${lines.join('\n')}`,
+      });
     }
 
     // Continuation hint goes first so Claude's attention is anchored.

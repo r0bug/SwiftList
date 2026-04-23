@@ -104,39 +104,56 @@ export async function commitBatch(args: CommitBatchArgs): Promise<CommitBatchOut
     );
   }
 
-  // Continuation hint stored on the batch by the server when the batch was
-  // queued. Shape matches ContinuationHint in ai.service.ts, with itemId.
+  // Continuation hint stored on the batch when it was queued. Two shapes:
+  //   - { groupId }        — manual-trigger path. Existing PhotoGroup; we
+  //                          create the Item INTO that group and set the
+  //                          Item.status = IN_PROCESS.
+  //   - { itemId, ... }    — legacy auto-ingest continuation (unused since
+  //                          the watcher stopped auto-identifying, but kept
+  //                          for back-compat with any in-flight batches).
   const continuation =
     batch.continuation && typeof batch.continuation === 'object'
-      ? (batch.continuation as { itemId?: string; itemTitle?: string })
+      ? (batch.continuation as { groupId?: string; itemId?: string; itemTitle?: string })
       : null;
+  const isManualTrigger = !!continuation?.groupId;
 
   const assignedItemIds: string[] = [];
 
   await prisma.$transaction(async (tx) => {
-    const firstCapturedAt = orderedPhotos
-      .map((p) => p.capturedAt)
-      .filter((d): d is Date => !!d)
-      .sort((a, b) => a.getTime() - b.getTime())[0];
-    const lastCapturedAt = orderedPhotos
-      .map((p) => p.capturedAt)
-      .filter((d): d is Date => !!d)
-      .sort((a, b) => b.getTime() - a.getTime())[0];
-    const filenameNumerics = orderedPhotos
-      .map((p) => filenameNumericSuffix(path.basename(p.originalPath)))
-      .filter((n): n is number => n !== null);
-
-    const group = await tx.photoGroup.create({
-      data: {
-        sourceFolder: batch.sourceFolder,
-        firstFilenameNumeric: filenameNumerics[0] ?? null,
-        lastFilenameNumeric: filenameNumerics[filenameNumerics.length - 1] ?? null,
-        firstCapturedAt: firstCapturedAt ?? null,
-        lastCapturedAt: lastCapturedAt ?? null,
-        status: 'ANALYZING',
-        llmDecision: result as unknown as Prisma.InputJsonValue,
-      },
-    });
+    let group;
+    if (isManualTrigger) {
+      const existing = await tx.photoGroup.findUnique({
+        where: { id: continuation!.groupId! },
+      });
+      if (!existing) throw new Error(`batch ${batchId}: group ${continuation!.groupId} not found`);
+      group = await tx.photoGroup.update({
+        where: { id: existing.id },
+        data: { status: 'ANALYZING', llmDecision: result as unknown as Prisma.InputJsonValue },
+      });
+    } else {
+      const firstCapturedAt = orderedPhotos
+        .map((p) => p.capturedAt)
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => a.getTime() - b.getTime())[0];
+      const lastCapturedAt = orderedPhotos
+        .map((p) => p.capturedAt)
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => b.getTime() - a.getTime())[0];
+      const filenameNumerics = orderedPhotos
+        .map((p) => filenameNumericSuffix(path.basename(p.originalPath)))
+        .filter((n): n is number => n !== null);
+      group = await tx.photoGroup.create({
+        data: {
+          sourceFolder: batch.sourceFolder,
+          firstFilenameNumeric: filenameNumerics[0] ?? null,
+          lastFilenameNumeric: filenameNumerics[filenameNumerics.length - 1] ?? null,
+          firstCapturedAt: firstCapturedAt ?? null,
+          lastCapturedAt: lastCapturedAt ?? null,
+          status: 'ANALYZING',
+          llmDecision: result as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
 
     for (const aiGroup of result.groups) {
       const memberPhotoIds = aiGroup.photoIndices
@@ -145,6 +162,7 @@ export async function commitBatch(args: CommitBatchArgs): Promise<CommitBatchOut
       if (memberPhotoIds.length === 0) continue;
 
       const isContinuation =
+        !isManualTrigger &&
         aiGroup.isContinuationOfExistingItem &&
         aiGroup.existingItemMatchConfidence >= HIGH_CONFIDENCE &&
         continuation?.itemId;
@@ -152,8 +170,9 @@ export async function commitBatch(args: CommitBatchArgs): Promise<CommitBatchOut
       let itemId: string;
       let decision: 'NEW_ITEM' | 'ADDED_TO_ITEM' | 'GROUPED_PENDING';
 
-      if (aiGroup.confidence < LOW_CONFIDENCE && !isContinuation) {
-        // Low confidence: leave photos in the group, no Item yet.
+      // Low-confidence auto-ingest path → leave photos in group. Manual
+      // trigger always creates an Item (the user explicitly asked).
+      if (aiGroup.confidence < LOW_CONFIDENCE && !isContinuation && !isManualTrigger) {
         await tx.photoGroup.update({
           where: { id: group.id },
           data: { status: 'PENDING' },
@@ -199,7 +218,9 @@ export async function commitBatch(args: CommitBatchArgs): Promise<CommitBatchOut
             upc: draft.upc ?? null,
             isbn: draft.isbn ?? null,
             mpn: draft.mpn ?? null,
-            status: 'DRAFT',
+            // Manual-trigger path: Item lands in IN_PROCESS (user hasn't
+            // confirmed it's ready for listing yet).
+            status: isManualTrigger ? 'IN_PROCESS' : 'DRAFT',
             stage: 'IDENTIFIED',
             sourceFolder: batch.sourceFolder,
             aiAnalysis: aiGroup as unknown as Prisma.InputJsonValue,
@@ -216,10 +237,19 @@ export async function commitBatch(args: CommitBatchArgs): Promise<CommitBatchOut
         data: { itemId, photoGroupId: group.id },
       });
 
-      await tx.photoGroup.update({
-        where: { id: group.id },
-        data: { itemId, status: 'ASSIGNED' },
-      });
+      // First assignment wins the group label. If there were multiple AI
+      // groups inside one user group, only the first gets the existing
+      // PhotoGroup — extras would need their own groups, but we don't
+      // currently support that (fine for single-item photo sets).
+      if (group.itemId === null) {
+        const itemTitle = await tx.item
+          .findUnique({ where: { id: itemId }, select: { title: true } })
+          .then((i) => i?.title ?? null);
+        await tx.photoGroup.update({
+          where: { id: group.id },
+          data: { itemId, status: 'ASSIGNED', label: itemTitle ?? undefined },
+        });
+      }
 
       for (const _pid of memberPhotoIds) {
         await tx.ingestEvent.create({

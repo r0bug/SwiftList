@@ -5,16 +5,22 @@ doc once the in-flight work below is done.
 
 ## Where we are (2026-04-23)
 
-**Manual-grouping scaffolding just landed.** The watcher no longer triggers
-AI identification automatically. New photos create `Photo` rows only (no
-`PhotoGroup`, no `Item`, no `ExternalAnalysisBatch` queue). Identification is
-user-driven from the web UI:
+**Manual-grouping flow is now end-to-end wired.** The watcher creates
+`Photo` rows only. Everything downstream is user-driven.
 
 - **/pool** — unassigned thumbnails, multi-select + "Group Selected" button.
-- **/groups/:id** — folder detail. Shows the grouped photos, per-photo
-  Remove-from-group and hard-Delete buttons, "+ Add photos from pool", and
-  **placeholder** buttons for "Run AI identification" and "eBay image search"
-  (disabled in this PR).
+- **/groups/:id** — folder detail with working identification actions:
+  - **Run AI identification** modal with optional per-run context textarea
+    + "use eBay image-search priors" checkbox. Anthropic provider creates
+    the Item inline (status `IN_PROCESS`); `external-mcp` queues an
+    `ExternalAnalysisBatch` with `continuation={groupId,context}` for a
+    Claude Code worker to drain.
+  - **eBay image search** modal — pick which photo to search from, scroll
+    results, "Use as identification" opens the approval panel (images-off
+    default, "stock photo OK" hint if condition=New), commits to
+    `/groups/:id/identify-ebay` and navigates to the new Item.
+  - Per-photo hover actions: 🔍 (image-search from this photo), ↩︎
+    (remove to pool), 🗑 (hard delete).
 - **/ (Items)** — filter tabs: Unidentified / In-process / Drafts / Listed /
   Sold. "Unidentified" pulls `PhotoGroup where itemId IS NULL`; the rest pull
   `Item` rows filtered by `status`.
@@ -34,32 +40,31 @@ Key code touched:
 - `packages/client/src/routes/{ItemsPage,PoolPage}.tsx` — rewritten for
   filter tabs / multi-select.
 
-## What's next (sequence the user approved)
+## What's next (everything in the prior sequence is DONE)
 
-1. **Run AI identification** endpoint + UI wiring on the folder detail page.
-   Accepts a PhotoGroup id + optional `context` text; LLM-analyzes the
-   photos; creates an `Item` with `status = IN_PROCESS` and attaches the
-   group. Re-runs replace the prior analysis but are gated by the approval
-   panel (#3 below). For `external-mcp` provider, still queues an
-   `ExternalAnalysisBatch` — the drain path (`packages/mcp-server`) is
-   untouched and still works.
-2. **eBay image search as identification** in folder detail. User clicks
-   image search on one photo, picks a result, whole group promotes to
-   `IN_PROCESS` under the selected eBay item's name. Backend is a
-   generalized variant of the existing `/items/:id/sold-comp-link` path.
-3. **Per-field import approval panel** — new `PendingCompLink` staging
-   shape (or `SoldCompLink.approvedFields Json`), with a checkbox-per-field
-   UI. Checkboxes default ON for title/category/specifics/description/
-   condition and OFF for images. If the Item's condition is New, surface a
-   hint next to the images checkbox but still require opt-in. This gates
-   both the AI re-run path and the eBay attach path.
-4. **Extension: Associate button on active eBay listing and /sch/ pages**
-   (sibling of `packages/extension/content-sold.js`) so sold-but-qty-remaining
-   items can be attached without hunting for the sold-only view.
-5. **eBay image search as ingest prior** — before any LLM call, search the
-   primary photo on eBay Browse, inject top 3–5 hits' title/category/
-   itemSpecifics into the prompt as hints. Browse API is rate-limited, so
-   start with primary-photo-only.
+Follow-on polish worth tracking:
+
+1. **Re-run AI identification with approval panel.** Currently the
+   `identify-ai` endpoint overwrites `Item` fields if run a second time
+   against the same group (since the group's `itemId` is set after the
+   first run, the transaction would fail with unique constraints). The
+   approval panel should gate which AI-suggested fields overwrite existing
+   ones. Today, re-run isn't reachable from the UI because the button only
+   shows on unidentified groups.
+2. **MCP server: restart-required after code changes.** Because Claude
+   Code spawns the MCP process at session start and Node caches imports,
+   code updates to `packages/mcp-server/dist/` don't take effect until the
+   Claude Code session is restarted. Not a code problem, just a reminder
+   when iterating on `commit.ts`.
+3. **eBay image-search priors cost signal.** The priors bolt runs a
+   Browse API call per identify-ai request. For bulk ingest sessions this
+   could push you over Browse API daily quotas. If that starts to bite,
+   either add a user-facing toggle (already wired as `useVisualPriors`)
+   default OFF, or cache priors by `Photo.sha256`.
+4. **Item detail editing for IN_PROCESS items.** There's no visible way
+   in the UI to promote `IN_PROCESS → DRAFT` or to edit the auto-generated
+   title. ItemDetailPage already has a PATCH path; a status-promotion
+   button on the detail page would close this loop.
 
 ## Running dev processes
 

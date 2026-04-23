@@ -70,6 +70,45 @@ export const api = {
     http<{ ok: true }>(`/groups/${groupId}`, { method: 'DELETE' }),
   deletePhoto: (photoId: string) =>
     http<{ ok: true }>(`/photos/${photoId}`, { method: 'DELETE' }),
+  identifyGroupAi: (groupId: string, body: { context?: string; useVisualPriors?: boolean }) =>
+    http<IdentifyAiResponse>(`/groups/${groupId}/identify-ai`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  groupImageSearch: (groupId: string, photoId: string, limit = 20) =>
+    http<{ itemSummaries: EbayHit[]; total: number }>(
+      `/groups/${groupId}/image-search`,
+      { method: 'POST', body: JSON.stringify({ photoId, limit }) },
+    ),
+  identifyGroupEbay: (
+    groupId: string,
+    body: {
+      ebayItemId: string;
+      ebayItemUrl?: string;
+      hit: {
+        title: string;
+        condition?: string;
+        categoryPath?: string;
+        categoryId?: string;
+        description?: string;
+        itemSpecifics?: Record<string, string>;
+        imageUrls?: string[];
+        price?: { value: string; currency: string };
+      };
+      approvedFields: {
+        title: boolean;
+        description: boolean;
+        category: boolean;
+        condition: boolean;
+        itemSpecifics: boolean;
+        images: boolean;
+      };
+    },
+  ) =>
+    http<{ itemId: string; ebayItemId: string; ebayItemUrl?: string }>(
+      `/groups/${groupId}/identify-ebay`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   listDrafts: (cursor?: string) =>
     http<{ drafts: DraftRow[]; nextCursor: string | null }>(
       `/drafts${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
@@ -118,11 +157,17 @@ export interface EbayHit {
   title: string;
   price?: { value: string; currency: string };
   condition?: string;
+  conditionId?: string;
   itemWebUrl?: string;
   image?: { imageUrl?: string };
   thumbnailImages?: Array<{ imageUrl: string }>;
   seller?: { username?: string; feedbackScore?: number };
+  categoryPath?: string;
 }
+
+export type IdentifyAiResponse =
+  | { queued: true; batchId: string; provider: string }
+  | { queued: false; itemId: string; costUsd: number; provider: string };
 
 export interface ApiKeyRow {
   id: string;

@@ -1,11 +1,15 @@
 // Runs on https://www.ebay.com/sch/*. Adds an "Associate with swiftlist Item"
-// button to each search result tile. If the URL has ?swiftlistItemId=…, all
-// associate-actions are pre-bound to that Item. Adapted from comptool's
-// extension/content-sold.js.
+// button to each search result tile. Works for BOTH active search and sold
+// search (LH_Sold=1) — the backend endpoint accepts either; the button
+// label tells the user what type of comp they're attaching. If the URL
+// carries ?swiftlistItemId=…, all associate-actions are pre-bound to that
+// Item. Adapted from comptool's extension/content-sold.js.
 
 (async () => {
   const url = new URL(location.href);
   const preboundItemId = url.searchParams.get('swiftlistItemId');
+  const isSold = url.searchParams.get('LH_Sold') === '1';
+  const kind = isSold ? 'sold' : 'active';
 
   // Wait for results to render.
   const cards = await waitFor(() => document.querySelectorAll('.s-item, .s-card'));
@@ -21,7 +25,7 @@
 
     const btn = document.createElement('button');
     btn.className = 'swiftlist-associate';
-    btn.textContent = preboundItemId ? '+ Associate' : '+ swiftlist';
+    btn.textContent = preboundItemId ? `+ Associate (${kind})` : `+ swiftlist (${kind})`;
     btn.style.cssText =
       'margin-top:6px;padding:4px 8px;background:#0064d2;color:#fff;border:0;border-radius:3px;cursor:pointer;font-size:11px;';
     btn.addEventListener('click', async (e) => {
@@ -40,7 +44,7 @@
             ebayItemId,
             title,
             soldPrice,
-            soldDate: soldDateText.match(/(\w{3}\s+\d{1,2},\s+\d{4})/)?.[1]
+            soldDate: isSold && soldDateText.match(/(\w{3}\s+\d{1,2},\s+\d{4})/)?.[1]
               ? new Date(soldDateText.match(/(\w{3}\s+\d{1,2},\s+\d{4})/)[1]).toISOString()
               : undefined,
             imageUrls: imageUrl ? [imageUrl] : [],
