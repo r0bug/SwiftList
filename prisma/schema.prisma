@@ -1,6 +1,7 @@
 // swiftlist — local-first eBay listing assistant
-// Tables live in the `swiftlist` Postgres schema, alongside `comptool`'s schema
-// in the same database. multiSchema preview is required for this layout.
+// Tables live in the `swiftlist` Postgres schema. install.sh's ensure_schema
+// step creates it; DATABASE_URL's ?schema=swiftlist sets search_path so the
+// unqualified CREATE TABLEs in migrations land there.
 
 generator client {
   provider = "prisma-client-js"

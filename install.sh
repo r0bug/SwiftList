@@ -174,8 +174,14 @@ source_env() {
   return 0
 }
 
+# psql rejects Prisma-specific query params (schema, connection_limit, etc.),
+# so strip the query string before handing the URL to libpq.
+_psql_url() {
+  printf '%s' "$DATABASE_URL" | sed -E 's|\?.*$||'
+}
+
 _db_reachable() {
-  command -v psql >/dev/null 2>&1 && psql "$DATABASE_URL" -c "SELECT 1" >/dev/null 2>&1
+  command -v psql >/dev/null 2>&1 && psql "$(_psql_url)" -c "SELECT 1" >/dev/null 2>&1
 }
 
 ensure_database() {
@@ -232,6 +238,24 @@ SQL
   return 1
 }
 
+ensure_schema() {
+  # schema.prisma declares schemas=["swiftlist"] and migrations use unqualified
+  # CREATE TABLE. The schema param in DATABASE_URL sets search_path, but
+  # Postgres silently skips schemas that don't exist and falls through to
+  # public. Without this step, a fresh DB lands tables in public and every
+  # subsequent `swiftlist.*` query fails.
+  if ! command -v psql >/dev/null 2>&1; then
+    dim "  (psql not installed — skipping schema check; migrations may create it)"
+    return 0
+  fi
+  psql "$(_psql_url)" -c "CREATE SCHEMA IF NOT EXISTS swiftlist AUTHORIZATION CURRENT_USER;" >/dev/null 2>&1 || {
+    red "Could not create/verify the 'swiftlist' schema. Check DB permissions."
+    return 1
+  }
+  grn "✓ 'swiftlist' schema present"
+  return 0
+}
+
 ensure_node_modules() {
   # Guard: node_modules fresh relative to package-lock.json mtime?
   if [ -d node_modules ] && [ -f node_modules/.package-lock.json ] && [ -f package-lock.json ]; then
@@ -280,12 +304,29 @@ prisma_seed() {
   return $?
 }
 
+build_shared() {
+  # The server imports from @swiftlist/shared which resolves to its dist/
+  # folder. On a fresh clone that folder doesn't exist, so tsx would fail
+  # with ERR_MODULE_NOT_FOUND the moment we boot dev:server below. Build
+  # it now. (client/server/watcher run via tsx and don't need pre-built
+  # dist, so we skip `--workspaces` to keep this step fast and predictable.)
+  if [ -f packages/shared/dist/index.js ] && [ packages/shared/dist/index.js -nt packages/shared/src/index.ts ]; then
+    grn "✓ @swiftlist/shared already built"
+    return 0
+  fi
+  bold "Building @swiftlist/shared..."
+  npm run build --workspace @swiftlist/shared
+  return $?
+}
+
 mint_extension_key() {
-  # Guard: do we already have a non-revoked "local-extension" key in the DB?
+  # Guard: do we already have a non-revoked API key for a Client named
+  # "local-extension"? The register endpoint sets Client.name from the request
+  # body and hardcodes ApiKey.name='default', so we have to join through Client.
   local exists=""
   if command -v psql >/dev/null 2>&1; then
-    exists=$(psql "$DATABASE_URL" -tAc \
-      "SELECT EXISTS(SELECT 1 FROM swiftlist.\"ApiKey\" WHERE name='local-extension' AND \"revokedAt\" IS NULL);" 2>/dev/null || echo "")
+    exists=$(psql "$(_psql_url)" -tAc \
+      "SELECT EXISTS(SELECT 1 FROM swiftlist.\"ApiKey\" k JOIN swiftlist.\"Client\" c ON c.id=k.\"clientId\" WHERE c.name='local-extension' AND k.\"revokedAt\" IS NULL);" 2>/dev/null || echo "")
   fi
   if [ "$exists" = "t" ]; then
     grn "✓ Extension API key already minted (already minted)"
@@ -407,10 +448,12 @@ STEPS=(
   ensure_env
   source_env
   ensure_database
+  ensure_schema
   ensure_node_modules
   prisma_migrate
   prisma_generate
   prisma_seed
+  build_shared
   mint_extension_key
   write_extension_defaults
   install_git_hooks
@@ -438,10 +481,12 @@ for step in "${STEPS[@]}"; do
         ensure_env)            echo "  Check that .env.example exists and .env is writable";;
         source_env)            echo "  Check DATABASE_URL is set in .env";;
         ensure_database)       echo "  Fix DATABASE_URL or start Postgres (docker compose up -d postgres) and re-run";;
+        ensure_schema)         echo "  Grant the DB user CREATE on the database, or pre-create 'swiftlist' schema manually";;
         ensure_node_modules)   echo "  Check network / npm registry access, then re-run";;
         prisma_migrate)        echo "  Check DB permissions (ALTER USER <user> CREATEDB;) and re-run";;
         prisma_generate)       echo "  Inspect the error above and re-run ./install.sh";;
         prisma_seed)           echo "  Check the seed script in prisma/seed.ts, then re-run";;
+        build_shared)          echo "  tsc failed for @swiftlist/shared — see errors above";;
         mint_extension_key)    echo "  See log above. You can re-run ./install.sh to retry.";;
         write_extension_defaults) echo "  Check packages/extension is writable";;
         install_git_hooks)     echo "  Check you're inside a git repo; re-run ./install.sh";;

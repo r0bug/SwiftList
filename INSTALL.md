@@ -44,14 +44,20 @@ CREATE ROLE swiftlist LOGIN PASSWORD 'swiftlist' CREATEDB;
 CREATE DATABASE swiftlist OWNER swiftlist;
 SQL
 
+# Create the 'swiftlist' schema that Prisma expects (the ?schema=swiftlist
+# in DATABASE_URL is just search_path — Postgres doesn't auto-create it):
+psql "postgresql://swiftlist:swiftlist@localhost:5432/swiftlist" \
+  -c "CREATE SCHEMA IF NOT EXISTS swiftlist AUTHORIZATION swiftlist;"
+
 npm install
+npm run build --workspace @swiftlist/shared   # server imports compiled dist/
 npx prisma migrate deploy   # or `migrate dev --name init` first time
 
 # Mint an API key:
 npm run dev:server &
 sleep 4
 curl -X POST -H "Content-Type: application/json" \
-  -d '{"name":"local"}' \
+  -d '{"name":"local-extension"}' \
   http://localhost:3004/api/v1/extension/register
 kill %1
 ```
