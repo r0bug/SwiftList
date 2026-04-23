@@ -205,6 +205,43 @@ router.post('/:id/sold-comp-link', apiKeyAuth, async (req, res) => {
   res.json({ ok: true, link });
 });
 
+// ── Photo thumbnail / file stream ─────────────────────────────────────
+// Used by the web UI as a fallback when a Photo has no publicUrl / cdnUrl
+// (or while that hosting step is still pending). Reads the file directly
+// from disk using whichever of thumbnailPath → optimizedPath → originalPath
+// is first readable, and streams it.
+
+import fs from 'node:fs';
+
+router.get('/photo/:photoId/thumb', apiKeyOrJwt, async (req, res) => {
+  const photoId = pstr(req.params.photoId);
+  const photo = await prisma.photo.findUnique({
+    where: { id: photoId },
+    select: { thumbnailPath: true, optimizedPath: true, originalPath: true, mime: true },
+  });
+  if (!photo) {
+    res.status(404).json({ error: 'Photo not found' });
+    return;
+  }
+  const candidates = [photo.thumbnailPath, photo.optimizedPath, photo.originalPath].filter(
+    (p): p is string => !!p,
+  );
+  const filePath = candidates.find((p) => {
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+  if (!filePath) {
+    res.status(404).json({ error: 'No readable photo file on disk' });
+    return;
+  }
+  res.setHeader('Content-Type', photo.mime || 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  fs.createReadStream(filePath).pipe(res);
+});
+
 // ── Merge + photo move ────────────────────────────────────────────────
 
 router.post('/:id/merge-into', jwtAuth, async (req, res) => {

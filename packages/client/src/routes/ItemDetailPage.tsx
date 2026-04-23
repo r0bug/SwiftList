@@ -3,11 +3,10 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ItemRow } from '../api/client.js';
 
-function photoSrc(p: { cdnUrl?: string | null; publicUrl?: string | null; thumbnailPath?: string | null }): string | undefined {
-  if ((p as { cdnUrl?: string | null }).cdnUrl) return (p as { cdnUrl?: string | null }).cdnUrl ?? undefined;
+function photoSrc(p: { id: string; cdnUrl?: string | null; publicUrl?: string | null }): string {
+  if ((p as { cdnUrl?: string | null }).cdnUrl) return (p as { cdnUrl?: string | null }).cdnUrl as string;
   if (p.publicUrl) return p.publicUrl;
-  if (p.thumbnailPath) return `/uploads/${p.thumbnailPath}`;
-  return undefined;
+  return `/api/v1/items/photo/${p.id}/thumb`;
 }
 
 export function ItemDetailPage() {

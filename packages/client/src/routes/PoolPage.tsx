@@ -3,11 +3,10 @@ import { api, type PoolPhoto } from '../api/client.js';
 
 // URL resolution mirrors ItemDetailPage: prefer publicUrl (absolute or
 // /public-images/... path), fall back to /uploads/<thumbnailPath>.
-function resolvePhotoSrc(p: PoolPhoto): string | undefined {
+function resolvePhotoSrc(p: PoolPhoto): string {
   if (p.cdnUrl) return p.cdnUrl;
   if (p.publicUrl) return p.publicUrl;
-  if (p.thumbnailPath) return `/uploads/${p.thumbnailPath}`;
-  return undefined;
+  return `/api/v1/items/photo/${p.id}/thumb`;
 }
 
 function formatDate(iso: string): string {

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import { env } from '../config/env.js';
+import { resolveConfigPath } from '../util/paths.js';
 
 export interface ProcessedImage {
   optimizedPath: string;
@@ -57,10 +58,10 @@ export async function processImage(
 
 /** Where a photo's working files live before it has an Item-derived slug. */
 export function pendingGroupDir(groupId: string): string {
-  return path.resolve(env.UPLOADS_DIR, `pending-${groupId}`);
+  return path.join(resolveConfigPath(env.UPLOADS_DIR), `pending-${groupId}`);
 }
 
 /** Where a photo's files live once its Item is identified and named. */
 export function itemGroupDir(slug: string): string {
-  return path.resolve(env.UPLOADS_DIR, slug);
+  return path.join(resolveConfigPath(env.UPLOADS_DIR), slug);
 }

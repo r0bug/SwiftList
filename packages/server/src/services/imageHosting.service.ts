@@ -8,6 +8,7 @@ import path from 'node:path';
 import slugify from 'slugify';
 import { env } from '../config/env.js';
 import { prisma } from '../db/prisma.js';
+import { resolveConfigPath } from '../util/paths.js';
 
 export interface HostedPhoto {
   photoId: string;
@@ -28,7 +29,7 @@ export async function hostItemImages(itemId: string): Promise<HostedPhoto[]> {
   if (item.photos.length === 0) return [];
 
   const slug = makeSlug(item.title, item.id.slice(-8));
-  const destDir = path.resolve(env.PUBLIC_IMAGES_DIR, 'swiftlist', slug);
+  const destDir = path.join(resolveConfigPath(env.PUBLIC_IMAGES_DIR), 'swiftlist', slug);
   fs.mkdirSync(destDir, { recursive: true });
 
   const out: HostedPhoto[] = [];
